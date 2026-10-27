@@ -13,13 +13,60 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # job-level env cannot read secrets, so detect them in a step.
+      - name: Detect signing material
+        id: signing
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE }}
+        run: |
+          if [ -n "$CERT" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import signing certificate
+        if: steps.signing.outputs.available == 'true'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       - name: Build
-        run: make
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
+            IDENTITY=$(security find-identity -v -p codesigning | \
+              grep "Developer ID Application" | head -1 | \
+              sed -E 's/.*"(.*)"/\1/')
+            echo "Signing as: $IDENTITY"
+            make SIGN_IDENTITY="$IDENTITY"
+          else
+            make
+          fi
 
       - name: Test
         run: make test
 
       - name: Package
+        env:
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -29,6 +76,21 @@ jobs:
             echo "tag $GITHUB_REF_NAME does not match Info.plist version $PLIST_VERSION"
             exit 1
           fi
+
+          if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
+            echo "$NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+            ditto -c -k --keepParent build/xboot.app "$RUNNER_TEMP/notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+              --key "$RUNNER_TEMP/notary.p8" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER" \
+              --wait
+            rm -f "$RUNNER_TEMP/notary.p8"
+            xcrun stapler staple build/xboot.app
+            xcrun stapler validate build/xboot.app
+            spctl -a -vvv --type exec build/xboot.app
+          fi
+
           ditto -c -k --keepParent build/xboot.app "xboot-${VERSION}.zip"
           shasum -a 256 "xboot-${VERSION}.zip" | tee "xboot-${VERSION}.zip.sha256"
 
