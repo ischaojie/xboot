@@ -39,11 +39,11 @@ and a readable error list.
 ## Install
 
 Download `xboot-*.zip` from [Releases](../../releases), unzip, and move `xboot.app`
-to `/Applications`. The build is ad-hoc signed, so the first launch needs:
+to `/Applications`. Releases are signed with a Developer ID certificate and notarized
+by Apple, so they launch with no Gatekeeper prompt.
 
-```sh
-xattr -dr com.apple.quarantine /Applications/xboot.app
-```
+Builds from source are ad-hoc signed; run them locally or clear the quarantine
+attribute yourself.
 
 Requires [`mobilebuildmcp`](https://www.mobilebuildmcp.com/):
 
