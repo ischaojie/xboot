@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      - name: Test
+        run: make test
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          PLIST_VERSION=$(plutil -extract CFBundleShortVersionString raw \
+            build/xboot.app/Contents/Info.plist)
+          if [ "$VERSION" != "$PLIST_VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Info.plist version $PLIST_VERSION"
+            exit 1
+          fi
+          ditto -c -k --keepParent build/xboot.app "xboot-${VERSION}.zip"
+          shasum -a 256 "xboot-${VERSION}.zip" | tee "xboot-${VERSION}.zip.sha256"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "xboot-${VERSION}.zip" \
+            "xboot-${VERSION}.zip.sha256" \
+            --title "xboot ${VERSION}" \
+            --generate-notes

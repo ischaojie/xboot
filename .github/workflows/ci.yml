@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build
+        run: make
+
+      - name: Test
+        run: make test
+
+      - name: Verify bundle
+        run: |
+          plutil -p build/xboot.app/Contents/Info.plist
+          test -f build/xboot.app/Contents/Resources/xboot.icns
+          test -x build/xboot.app/Contents/MacOS/xboot
