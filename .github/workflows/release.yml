@@ -59,6 +59,15 @@ jobs:
             make
           fi
 
+      - name: Verify signature
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          codesign -dv --verbose=4 build/xboot.app 2>&1 | tee "$RUNNER_TEMP/sig.txt"
+          grep -q "Developer ID Application" "$RUNNER_TEMP/sig.txt"
+          grep -q "runtime" "$RUNNER_TEMP/sig.txt"
+          codesign --verify --deep --strict --verbose=2 build/xboot.app
+
       - name: Test
         run: make test
 
