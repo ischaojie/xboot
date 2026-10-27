@@ -11,6 +11,8 @@
 - (NSString *)displayName;
 
 - (MBTTarget *)targetForScheme:(NSString *)scheme;
+/// The first target that can actually produce a runnable app.
+- (MBTTarget *)firstRunnableTarget;
 - (MBTTarget *)addTargetWithScheme:(NSString *)scheme;
 - (void)removeTargetWithScheme:(NSString *)scheme;
 

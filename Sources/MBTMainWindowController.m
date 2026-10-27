@@ -44,6 +44,7 @@ static const CGFloat kRowHeight = 34;
     NSTextField *_schemeLabel;
     NSTextField *_platformLabel;
     NSTextField *_statusLabel;
+    NSView *_statusDot;
     NSArray<NSDictionary *> *_simulators;
 }
 
@@ -68,18 +69,22 @@ static const CGFloat kRowHeight = 34;
     _simulatorPopUp.font = [NSFont systemFontOfSize:11];
     _simulatorPopUp.target = self;
     _simulatorPopUp.action = @selector(simulatorChanged:);
-    [_simulatorPopUp.widthAnchor constraintEqualToConstant:172].active = YES;
+    [_simulatorPopUp.widthAnchor constraintGreaterThanOrEqualToConstant:120].active = YES;
+    [_simulatorPopUp.widthAnchor constraintLessThanOrEqualToConstant:220].active = YES;
 
     _statusLabel = [NSTextField labelWithString:@""];
     _statusLabel.font = [NSFont systemFontOfSize:10.5];
     _statusLabel.textColor = NSColor.tertiaryLabelColor;
     _statusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 
-    NSButton *run = [NSButton buttonWithTitle:@"▶ Run" target:self action:@selector(run:)];
+    NSButton *run = [NSButton buttonWithTitle:@"Run" target:self action:@selector(run:)];
     run.bezelStyle = NSBezelStyleRounded;
     run.bezelColor = NSColor.controlAccentColor;
     run.controlSize = NSControlSizeSmall;
     run.font = [NSFont systemFontOfSize:11];
+    run.image = [NSImage imageWithSystemSymbolName:@"play.fill" accessibilityDescription:nil];
+    run.imagePosition = NSImageLeading;
+    run.imageScaling = NSImageScaleProportionallyDown;
     [run.widthAnchor constraintGreaterThanOrEqualToConstant:66].active = YES;
     self.runButton = run;
 
@@ -89,8 +94,16 @@ static const CGFloat kRowHeight = 34;
     self.spinner.displayedWhenStopped = NO;
     [self.spinner.widthAnchor constraintEqualToConstant:14].active = YES;
 
+    _statusDot = [NSView new];
+    _statusDot.wantsLayer = YES;
+    _statusDot.layer.cornerRadius = 3.5;
+    _statusDot.layer.backgroundColor = NSColor.systemRedColor.CGColor;
+    _statusDot.hidden = YES;
+    [_statusDot.widthAnchor constraintEqualToConstant:7].active = YES;
+    [_statusDot.heightAnchor constraintEqualToConstant:7].active = YES;
+
     NSStackView *row = [NSStackView stackViewWithViews:@[
-        _schemeLabel, _platformLabel, _simulatorPopUp, _statusLabel, NSView.new, self.spinner, run
+        _statusDot, _schemeLabel, _platformLabel, _simulatorPopUp, _statusLabel, NSView.new, self.spinner, run
     ]];
     row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     row.alignment = NSLayoutAttributeCenterY;
@@ -227,13 +240,20 @@ static const CGFloat kRowHeight = 34;
         _platformLabel.hidden = NO;
         _platformLabel.stringValue = target.probed ? (target.kindLabel ?: @"不可运行") : @"探测中…";
         [self setRunEnabled:NO];
+        // A button that can never be pressed is just noise; the label says why.
+        self.runButton.hidden = YES;
         return;
     }
 
     _platformLabel.hidden = !target.isMacOS;
     _platformLabel.stringValue = target.isMacOS ? @"macOS" : @"";
     self.simulatorPopUp.hidden = target.isMacOS;
+    self.runButton.hidden = NO;
     [self setRunEnabled:YES];
+}
+
+- (void)setFailed:(BOOL)failed {
+    _statusDot.hidden = !failed;
 }
 
 - (void)setRunEnabled:(BOOL)enabled {
@@ -246,10 +266,12 @@ static const CGFloat kRowHeight = 34;
     if (busy) {
         [self.spinner startAnimation:nil];
         self.runButton.title = @"取消";
+        self.runButton.image = nil;
         [self setRunEnabled:YES];
     } else {
         [self.spinner stopAnimation:nil];
-        self.runButton.title = @"▶ Run";
+        self.runButton.title = @"Run";
+        self.runButton.image = [NSImage imageWithSystemSymbolName:@"play.fill" accessibilityDescription:nil];
     }
     [self setStatusText:status];
 }
@@ -298,9 +320,8 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSDate *buildStartTime;
 @property (nonatomic, strong) NSArray<NSDictionary *> *simulators;
 
-@property (nonatomic, strong) NSTextField *pathLabel;
 @property (nonatomic, strong) NSPopUpButton *projectPopUp;
-@property (nonatomic, strong) NSTextField *configLabel;
+@property (nonatomic, strong) NSPopUpButton *configPopUp;
 @property (nonatomic, strong) NSScrollView *rowsScrollView;
 @property (nonatomic, strong) NSLayoutConstraint *rowsHeightConstraint;
 @property (nonatomic, strong) NSStackView *rootStack;
@@ -318,8 +339,7 @@ static const CGFloat kRowHeight = 34;
 
 - (instancetype)initWithStore:(MBTProjectStore *)store {
     NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, kWindowWidth, 420)
-                                                   styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                                                              NSWindowStyleMaskResizable)
+                                                   styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
     window.title = @"xboot";
@@ -384,21 +404,18 @@ static const CGFloat kRowHeight = 34;
     add.toolTip = @"添加项目";
     [add.widthAnchor constraintEqualToConstant:26].active = YES;
 
-    NSButton *remove = [NSButton buttonWithTitle:@"－" target:self action:@selector(removeProject:)];
-    remove.bezelStyle = NSBezelStyleRounded;
-    remove.controlSize = NSControlSizeSmall;
-    remove.toolTip = @"移除项目";
-    [remove.widthAnchor constraintEqualToConstant:26].active = YES;
+    NSButton *more = [NSButton buttonWithTitle:@"⋯" target:self action:@selector(showMoreMenu:)];
+    more.bezelStyle = NSBezelStyleRounded;
+    more.controlSize = NSControlSizeSmall;
+    more.toolTip = @"更多";
+    [more.widthAnchor constraintEqualToConstant:26].active = YES;
 
-    NSButton *refresh = [NSButton buttonWithTitle:@"↻" target:self action:@selector(rediscoverTargets:)];
-    refresh.bezelStyle = NSBezelStyleRounded;
-    refresh.controlSize = NSControlSizeSmall;
-    refresh.toolTip = @"重新探测 targets";
-    [refresh.widthAnchor constraintEqualToConstant:26].active = YES;
-
-    self.configLabel = [NSTextField labelWithString:@""];
-    self.configLabel.font = [NSFont systemFontOfSize:11];
-    self.configLabel.textColor = NSColor.secondaryLabelColor;
+    self.configPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.configPopUp.controlSize = NSControlSizeSmall;
+    self.configPopUp.font = [NSFont systemFontOfSize:11];
+    [self.configPopUp addItemsWithTitles:@[ @"Debug", @"Release" ]];
+    self.configPopUp.target = self;
+    self.configPopUp.action = @selector(configChanged:);
 
     self.logButton = [NSButton buttonWithTitle:@"Log" target:self action:@selector(toggleLog:)];
     self.logButton.bezelStyle = NSBezelStyleRounded;
@@ -407,18 +424,12 @@ static const CGFloat kRowHeight = 34;
     self.logButton.toolTip = @"构建输出";
 
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
-        self.projectPopUp, add, remove, refresh, NSView.new, self.logButton, self.configLabel
+        self.projectPopUp, add, more, NSView.new, self.logButton, self.configPopUp
     ]];
     toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     toolbar.alignment = NSLayoutAttributeCenterY;
     toolbar.spacing = 6;
 
-    self.pathLabel = [NSTextField labelWithString:@""];
-    self.pathLabel.font = [NSFont systemFontOfSize:10.5];
-    self.pathLabel.textColor = NSColor.tertiaryLabelColor;
-    self.pathLabel.lineBreakMode = NSLineBreakByTruncatingHead;
-    [self.pathLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSBox *topSeparator = [self separator];
     NSBox *bottomSeparator = [self separator];
@@ -460,7 +471,7 @@ static const CGFloat kRowHeight = 34;
 
 
     NSStackView *stack = [NSStackView stackViewWithViews:@[
-        toolbar, self.pathLabel, topSeparator, self.rowsScrollView, self.emptyLabel, bottomSeparator
+        toolbar, topSeparator, self.rowsScrollView, self.emptyLabel, bottomSeparator
     ]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
@@ -479,7 +490,6 @@ static const CGFloat kRowHeight = 34;
         [stack.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-14],
 
         [toolbar.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.pathLabel.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [topSeparator.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [self.rowsScrollView.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [bottomSeparator.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
@@ -513,11 +523,13 @@ static const CGFloat kRowHeight = 34;
     }
     if (self.project) {
         [self.projectPopUp selectItemWithTitle:[self.project displayName]];
-        self.pathLabel.stringValue = self.project.path;
-        self.configLabel.stringValue = self.project.configuration ?: @"Debug";
+        self.projectPopUp.toolTip = self.project.path;
+        [self.configPopUp selectItemWithTitle:self.project.configuration ?: @"Debug"];
+        // 4. the title bar is the only "where am I" signal in a single-window app
+        self.window.title = [self.project displayName];
     } else {
-        self.pathLabel.stringValue = @"";
-        self.configLabel.stringValue = @"";
+        self.projectPopUp.toolTip = nil;
+        self.window.title = @"xboot";
     }
 
     [self rebuildRows];
@@ -821,6 +833,49 @@ static const CGFloat kRowHeight = 34;
     }];
 }
 
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.action == @selector(runFirstRunnable:)) return [self.project firstRunnableTarget] != nil;
+    if (item.action == @selector(showLog:)) return YES;
+    return YES;
+}
+
+- (void)showMoreMenu:(NSButton *)sender {
+    NSMenu *menu = [[NSMenu alloc] init];
+    NSMenuItem *rediscover = [[NSMenuItem alloc] initWithTitle:@"重新探测 targets"
+                                                        action:@selector(rediscoverTargets:)
+                                                 keyEquivalent:@""];
+    rediscover.target = self;
+    rediscover.enabled = self.project != nil;
+    [menu addItem:rediscover];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *remove = [[NSMenuItem alloc] initWithTitle:@"移除项目"
+                                                    action:@selector(removeProject:)
+                                             keyEquivalent:@""];
+    remove.target = self;
+    remove.enabled = self.project != nil;
+    [menu addItem:remove];
+
+    [menu popUpMenuPositioningItem:nil
+                        atLocation:NSMakePoint(0, NSHeight(sender.bounds) + 4)
+                            inView:sender];
+}
+
+- (void)configChanged:(NSPopUpButton *)sender {
+    if (!self.project) return;
+    self.project.configuration = sender.titleOfSelectedItem ?: @"Debug";
+    [self.store save];
+}
+
+- (void)runFirstRunnable:(id)sender {
+    MBTTarget *target = [self.project firstRunnableTarget];
+    if (target) [self runTarget:target];
+}
+
+- (void)showLog:(id)sender {
+    [self toggleLog:sender];
+}
+
 - (void)removeProject:(id)sender {
     if (!self.project) return;
     [self.store removeProjectAtPath:self.project.path];
@@ -871,6 +926,7 @@ static const CGFloat kRowHeight = 34;
 
     MBTTargetRow *row = [self rowForTarget:target];
     self.activeRow = row;
+    [row setFailed:NO];
     [row setBusy:YES status:@"准备中…"];
     [self setRowsEnabled:NO except:row];
 
@@ -940,6 +996,7 @@ static const CGFloat kRowHeight = 34;
             if (generation == self.runGeneration && !self.runner.isRunning) [row fadeOutStatus];
         });
     } else {
+        [row setFailed:YES];
         [row setBusy:NO
                status:self.diagnostics.count
                           ? [NSString stringWithFormat:@"失败 · %lu 个错误", (unsigned long)self.diagnostics.count]

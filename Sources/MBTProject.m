@@ -22,6 +22,13 @@
     return nil;
 }
 
+- (MBTTarget *)firstRunnableTarget {
+    for (MBTTarget *target in self.targets) {
+        if (target.platform.length > 0) return target;
+    }
+    return nil;
+}
+
 - (MBTTarget *)addTargetWithScheme:(NSString *)scheme {
     MBTTarget *existing = [self targetForScheme:scheme];
     if (existing) return existing;

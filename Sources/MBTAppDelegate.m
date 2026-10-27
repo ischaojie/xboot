@@ -24,6 +24,26 @@
     NSMenu *appMenu = [NSMenu new];
     [appMenu addItemWithTitle:@"About xboot" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
+
+    // Explicit targets: a nil target does not reliably reach the window controller.
+    NSMenuItem *runItem = [[NSMenuItem alloc] initWithTitle:@"Run"
+                                                    action:@selector(runFirstRunnable:)
+                                             keyEquivalent:@"r"];
+    runItem.target = self;
+    [appMenu addItem:runItem];
+
+    NSMenuItem *logItem = [[NSMenuItem alloc] initWithTitle:@"Show Log"
+                                                    action:@selector(showLog:)
+                                             keyEquivalent:@"l"];
+    logItem.target = self;
+    [appMenu addItem:logItem];
+
+    NSMenuItem *openItem = [[NSMenuItem alloc] initWithTitle:@"Open Project…"
+                                                     action:@selector(addProject:)
+                                              keyEquivalent:@"o"];
+    openItem.target = self;
+    [appMenu addItem:openItem];
+    [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Hide xboot" action:@selector(hide:) keyEquivalent:@"h"];
     [appMenu addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
@@ -39,6 +59,18 @@
     [mainMenu addItem:windowItem];
 
     [NSApp setMainMenu:mainMenu];
+}
+
+- (void)runFirstRunnable:(id)sender {
+    [self.windowController runFirstRunnable:sender];
+}
+
+- (void)showLog:(id)sender {
+    [self.windowController showLog:sender];
+}
+
+- (void)addProject:(id)sender {
+    [self.windowController addProject:sender];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {

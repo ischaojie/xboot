@@ -267,6 +267,30 @@ static void test_target_round_trip(void) {
     EXPECT([skippedCopy.kindLabel isEqualToString:@"extension"]);
 }
 
+static void test_first_runnable_target(void) {
+    MBTProject *project = [MBTProject projectWithPath:@"/tmp/A.xcodeproj"];
+    EXPECT([project firstRunnableTarget] == nil);
+
+    MBTTarget *aggregate = [project addTargetWithScheme:@"Aggregate"];
+    aggregate.probed = YES;
+    EXPECT(aggregate.platform.length == 0);
+    EXPECT([project firstRunnableTarget] == nil);
+
+    // Not probed yet: unknown, must not be picked.
+    MBTTarget *pending = [project addTargetWithScheme:@"Pending"];
+    EXPECT([project firstRunnableTarget] == nil);
+
+    MBTTarget *app = [project addTargetWithScheme:@"App"];
+    app.platform = @"ios";
+    app.probed = YES;
+    EXPECT([project firstRunnableTarget] == app);
+
+    MBTTarget *mac = [project addTargetWithScheme:@"Mac"];
+    mac.platform = @"macos";
+    mac.probed = YES;
+    EXPECT([project firstRunnableTarget] == app);
+}
+
 int main(void) {
     @autoreleasepool {
         test_parses_build_stage();
@@ -281,6 +305,7 @@ int main(void) {
         test_diagnostic_display_filter();
         test_location_with_column();
         test_target_round_trip();
+        test_first_runnable_target();
         test_line_buffer_splits_across_chunks();
         printf("%d checks, %d failures\n", gChecks, gFailures);
         return gFailures > 0 ? 1 : 0;
