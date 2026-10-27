@@ -1,5 +1,7 @@
 # xboot
 
+[![CI](https://github.com/ischaojie/xboot/actions/workflows/ci.yml/badge.svg)](https://github.com/ischaojie/xboot/actions/workflows/ci.yml)
+
 A Dock app with one row per target, that builds and runs it without opening Xcode.
 
 ## Why
