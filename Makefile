@@ -10,6 +10,15 @@ LDFLAGS    := -framework Cocoa
 SOURCES    := $(wildcard Sources/*.m)
 ICON       := Resources/xboot.icns
 
+# "-" is ad-hoc. Set SIGN_IDENTITY to a Developer ID to enable hardened runtime
+# and a secure timestamp, both required for notarization.
+SIGN_IDENTITY ?= -
+CODESIGN      := codesign --force
+ifneq ($(SIGN_IDENTITY),-)
+CODESIGN      += --options runtime --timestamp
+endif
+CODESIGN      += --sign "$(SIGN_IDENTITY)"
+
 .PHONY: all run test icon clean
 
 all: $(BUNDLE)/Contents/MacOS/$(APP)
@@ -29,7 +38,7 @@ $(BUNDLE)/Contents/MacOS/$(APP): $(SOURCES) Resources/Info.plist $(ICON)
 	$(CC) $(CFLAGS) $(SOURCES) $(LDFLAGS) -o $@
 	@cp Resources/Info.plist $(BUNDLE)/Contents/Info.plist
 	@cp $(ICON) $(BUNDLE)/Contents/Resources/xboot.icns
-	@codesign --force --sign - $(BUNDLE) 2>/dev/null
+	@$(CODESIGN) $(BUNDLE)
 	@echo "built $(BUNDLE)"
 
 run: all
