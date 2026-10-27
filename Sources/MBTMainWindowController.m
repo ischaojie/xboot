@@ -535,7 +535,11 @@ static const CGFloat kRowHeight = 34;
     }
 
     [self rebuildRows];
-    if (self.project) [self syncTargetsForProject:self.project];
+    // Only probe when there is nothing cached; otherwise switching projects would
+    // run xcodebuild -list every time.
+    if (self.project && !self.project.targets.count) {
+        [self syncTargetsForProject:self.project];
+    }
 }
 
 - (void)syncTargetsForProject:(MBTProject *)project {
@@ -749,8 +753,10 @@ static const CGFloat kRowHeight = 34;
     NSInteger index = sender.indexOfSelectedItem;
     if (index < 0 || index >= (NSInteger)self.store.projects.count) return;
     self.project = self.store.projects[(NSUInteger)index];
+    // touch reorders the store, so the popup has to be rebuilt or the next
+    // selection picks the wrong project.
     [self.store touchProjectAtPath:self.project.path];
-    [self rebuildRows];
+    [self reload];
 }
 
 - (void)addProject:(id)sender {
