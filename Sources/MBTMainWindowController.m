@@ -151,16 +151,19 @@ static NSString *const kToggleFavorite = @"toggle-favorite";
     if (favoriteItems.count && otherItems.count) [menu addItem:[NSMenuItem separatorItem]];
     for (NSMenuItem *item in otherItems) [menu addItem:item];
 
+    [self.simulatorPopUp setMenu:menu];
+    // The toggle goes first: with 20+ simulators a trailing item lands off-screen.
     if (self.target.simulatorID.length) {
-        [menu addItem:[NSMenuItem separatorItem]];
         BOOL isFavorite = [favorites containsObject:self.target.simulatorID];
-        NSString *title = isFavorite ? @"取消收藏当前设备" : @"收藏当前设备";
+        NSString *name = self.target.simulatorName ?: @"当前设备";
+        NSString *title = isFavorite
+            ? [NSString stringWithFormat:@"取消收藏 %@", name]
+            : [NSString stringWithFormat:@"收藏 %@", name];
         NSMenuItem *toggle = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
         toggle.representedObject = kToggleFavorite;
-        [menu addItem:toggle];
+        [menu insertItem:toggle atIndex:0];
+        [menu insertItem:[NSMenuItem separatorItem] atIndex:1];
     }
-
-    [self.simulatorPopUp setMenu:menu];
     [self selectCurrentSimulator];
     [self updatePlatformDisplay];
 }
