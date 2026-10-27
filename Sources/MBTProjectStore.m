@@ -1,10 +1,12 @@
 #import "MBTProjectStore.h"
 
 static NSString *const kProjectsKey = @"projects";
+static NSString *const kFavoritesKey = @"favoriteSimulators";
 
 @interface MBTProjectStore ()
 @property (nonatomic, strong) NSUserDefaults *defaults;
 @property (nonatomic, strong) NSMutableArray<MBTProject *> *items;
+@property (nonatomic, strong) NSMutableArray<NSString *> *favorites;
 @end
 
 @implementation MBTProjectStore
@@ -14,12 +16,17 @@ static NSString *const kProjectsKey = @"projects";
     if (self) {
         _defaults = defaults;
         _items = [NSMutableArray array];
+        _favorites = [NSMutableArray array];
         [self load];
     }
     return self;
 }
 
 - (void)load {
+    for (id entry in [self.defaults arrayForKey:kFavoritesKey]) {
+        if ([entry isKindOfClass:[NSString class]]) [self.favorites addObject:entry];
+    }
+
     NSArray *raw = [self.defaults arrayForKey:kProjectsKey];
     for (id entry in raw) {
         if (![entry isKindOfClass:[NSDictionary class]]) continue;
@@ -64,6 +71,25 @@ static NSString *const kProjectsKey = @"projects";
     if (!project) return;
     [self.items removeObjectIdenticalTo:project];
     [self save];
+}
+
+- (NSArray<NSString *> *)favoriteSimulatorIDs {
+    return [self.favorites copy];
+}
+
+- (BOOL)isSimulatorFavorite:(NSString *)simulatorID {
+    return simulatorID && [self.favorites containsObject:simulatorID];
+}
+
+- (void)toggleSimulatorFavorite:(NSString *)simulatorID {
+    if (!simulatorID.length) return;
+    if ([self.favorites containsObject:simulatorID]) {
+        [self.favorites removeObject:simulatorID];
+    } else {
+        [self.favorites addObject:simulatorID];
+    }
+    [self.defaults setObject:[self.favorites copy] forKey:kFavoritesKey];
+    [self.defaults synchronize];
 }
 
 - (void)save {

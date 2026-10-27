@@ -25,9 +25,10 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSButton *runButton;
 @property (nonatomic, strong) NSProgressIndicator *spinner;
 @property (nonatomic, copy) void (^onRun)(MBTTarget *target);
-@property (nonatomic, copy) void (^onSimulatorPick)(MBTTarget *target, NSInteger index);
+@property (nonatomic, copy) void (^onSimulatorPick)(MBTTarget *target, NSDictionary *simulator);
+@property (nonatomic, copy) void (^onToggleFavorite)(MBTTarget *target, NSString *simulatorID);
 - (instancetype)initWithTarget:(MBTTarget *)target;
-- (void)setSimulators:(NSArray<NSDictionary *> *)simulators;
+- (void)setSimulators:(NSArray<NSDictionary *> *)simulators favorites:(NSSet<NSString *> *)favorites;
 - (void)setBusy:(BOOL)busy status:(NSString *)status;
 - (void)setIdleStatus:(NSString *)status;
 @end
@@ -36,7 +37,10 @@ static const CGFloat kRowHeight = 34;
     NSTextField *_schemeLabel;
     NSTextField *_platformLabel;
     NSTextField *_statusLabel;
+    NSArray<NSDictionary *> *_simulators;
 }
+
+static NSString *const kToggleFavorite = @"toggle-favorite";
 
 - (instancetype)initWithTarget:(MBTTarget *)target {
     self = [super initWithFrame:NSMakeRect(0, 0, kWindowWidth, kRowHeight)];
@@ -98,22 +102,66 @@ static const CGFloat kRowHeight = 34;
 }
 
 - (void)simulatorChanged:(NSPopUpButton *)sender {
-    if (self.onSimulatorPick) self.onSimulatorPick(self.target, sender.indexOfSelectedItem);
+    id picked = sender.selectedItem.representedObject;
+    if ([picked isKindOfClass:[NSString class]] && [picked isEqualToString:kToggleFavorite]) {
+        NSString *simulatorID = self.target.simulatorID;
+        [self selectCurrentSimulator];
+        if (self.onToggleFavorite) self.onToggleFavorite(self.target, simulatorID);
+        return;
+    }
+    if ([picked isKindOfClass:[NSDictionary class]] && self.onSimulatorPick) {
+        self.onSimulatorPick(self.target, picked);
+    }
+}
+
+- (void)selectCurrentSimulator {
+    for (NSMenuItem *item in self.simulatorPopUp.menu.itemArray) {
+        NSDictionary *simulator = item.representedObject;
+        if (![simulator isKindOfClass:[NSDictionary class]]) continue;
+        if ([simulator[@"simulatorId"] isEqualToString:self.target.simulatorID]) {
+            [self.simulatorPopUp selectItem:item];
+            return;
+        }
+    }
+    [self.simulatorPopUp selectItemAtIndex:0];
 }
 
 - (void)run:(id)sender {
     if (self.onRun) self.onRun(self.target);
 }
 
-- (void)setSimulators:(NSArray<NSDictionary *> *)simulators {
-    [self.simulatorPopUp removeAllItems];
+- (void)setSimulators:(NSArray<NSDictionary *> *)simulators favorites:(NSSet<NSString *> *)favorites {
+    _simulators = simulators;
+
+    NSMenu *menu = [[NSMenu alloc] init];
+    NSMutableArray<NSMenuItem *> *favoriteItems = [NSMutableArray array];
+    NSMutableArray<NSMenuItem *> *otherItems = [NSMutableArray array];
+
     for (NSDictionary *simulator in simulators) {
-        [self.simulatorPopUp addItemWithTitle:simulator[@"name"] ?: @"?"];
+        BOOL picked = [favorites containsObject:simulator[@"simulatorId"] ?: @""];
+        NSString *title = picked
+            ? [NSString stringWithFormat:@"★ %@", simulator[@"name"] ?: @"?"]
+            : (simulator[@"name"] ?: @"?");
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        item.representedObject = simulator;
+        [(picked ? favoriteItems : otherItems) addObject:item];
     }
-    if (self.target.simulatorName.length) {
-        [self.simulatorPopUp selectItemWithTitle:self.target.simulatorName];
+
+    for (NSMenuItem *item in favoriteItems) [menu addItem:item];
+    if (favoriteItems.count && otherItems.count) [menu addItem:[NSMenuItem separatorItem]];
+    for (NSMenuItem *item in otherItems) [menu addItem:item];
+
+    if (self.target.simulatorID.length) {
+        [menu addItem:[NSMenuItem separatorItem]];
+        BOOL isFavorite = [favorites containsObject:self.target.simulatorID];
+        NSString *title = isFavorite ? @"取消收藏当前设备" : @"收藏当前设备";
+        NSMenuItem *toggle = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        toggle.representedObject = kToggleFavorite;
+        [menu addItem:toggle];
     }
-    [self invalidateIntrinsicContentSize];
+
+    [self.simulatorPopUp setMenu:menu];
+    [self selectCurrentSimulator];
     [self updatePlatformDisplay];
 }
 
@@ -443,11 +491,20 @@ static const CGFloat kRowHeight = 34;
 
     for (MBTTarget *target in self.project.targets) {
         MBTTargetRow *row = [[MBTTargetRow alloc] initWithTarget:target];
-        [row setSimulators:self.simulators];
+        [row setSimulators:self.simulators
+                 favorites:[NSSet setWithArray:self.store.favoriteSimulatorIDs]];
         __weak typeof(self) weakSelf = self;
         row.onRun = ^(MBTTarget *t) { [weakSelf runTarget:t]; };
-        row.onSimulatorPick = ^(MBTTarget *t, NSInteger index) {
-            [weakSelf pickSimulator:index forTarget:t];
+        row.onSimulatorPick = ^(MBTTarget *t, NSDictionary *simulator) {
+            __strong typeof(weakSelf) self = weakSelf;
+            t.simulatorID = simulator[@"simulatorId"];
+            t.simulatorName = simulator[@"name"];
+            [self.store save];
+        };
+        row.onToggleFavorite = ^(MBTTarget *t, NSString *simulatorID) {
+            __strong typeof(weakSelf) self = weakSelf;
+            [self.store toggleSimulatorFavorite:simulatorID];
+            [self rebuildRows];
         };
         [self.rowsStack addArrangedSubview:row];
         [row.widthAnchor constraintEqualToAnchor:self.rowsStack.widthAnchor].active = YES;
@@ -533,14 +590,6 @@ static const CGFloat kRowHeight = 34;
         if ([simulator[@"name"] hasPrefix:@"iPhone"]) return simulator;
     }
     return self.simulators.firstObject ?: @{};
-}
-
-- (void)pickSimulator:(NSInteger)index forTarget:(MBTTarget *)target {
-    if (index < 0 || index >= (NSInteger)self.simulators.count) return;
-    NSDictionary *simulator = self.simulators[(NSUInteger)index];
-    target.simulatorID = simulator[@"simulatorId"];
-    target.simulatorName = simulator[@"name"];
-    [self.store save];
 }
 
 #pragma mark - Run

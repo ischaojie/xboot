@@ -130,6 +130,28 @@ static void test_store_add_and_order(void) {
     EXPECT(reloaded.projects.count == 1);
 }
 
+static void test_simulator_favorites(void) {
+    NSUserDefaults *defaults = TestDefaults();
+    MBTProjectStore *store = [[MBTProjectStore alloc] initWithDefaults:defaults];
+    EXPECT(store.favoriteSimulatorIDs.count == 0);
+    EXPECT(![store isSimulatorFavorite:@"UDID-1"]);
+
+    [store toggleSimulatorFavorite:@"UDID-1"];
+    EXPECT([store isSimulatorFavorite:@"UDID-1"]);
+    EXPECT(store.favoriteSimulatorIDs.count == 1);
+
+    [store toggleSimulatorFavorite:@"UDID-2"];
+    EXPECT(store.favoriteSimulatorIDs.count == 2);
+
+    MBTProjectStore *reloaded = [[MBTProjectStore alloc] initWithDefaults:defaults];
+    EXPECT([reloaded isSimulatorFavorite:@"UDID-1"]);
+    EXPECT([reloaded isSimulatorFavorite:@"UDID-2"]);
+
+    [reloaded toggleSimulatorFavorite:@"UDID-1"];
+    EXPECT(![reloaded isSimulatorFavorite:@"UDID-1"]);
+    EXPECT(reloaded.favoriteSimulatorIDs.count == 1);
+}
+
 static void test_store_migrates_legacy_single_scheme(void) {
     NSUserDefaults *defaults = TestDefaults();
     NSArray *legacy = @[@{
@@ -186,6 +208,7 @@ int main(void) {
         test_project_targets();
         test_store_add_and_order();
         test_store_migrates_legacy_single_scheme();
+        test_simulator_favorites();
         test_line_buffer_splits_across_chunks();
         printf("%d checks, %d failures\n", gChecks, gFailures);
         return gFailures > 0 ? 1 : 0;
