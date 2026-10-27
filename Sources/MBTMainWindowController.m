@@ -332,6 +332,7 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSTextField *configLabel;
 @property (nonatomic, strong) NSScrollView *rowsScrollView;
 @property (nonatomic, strong) NSLayoutConstraint *rowsHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *errorHeightConstraint;
 @property (nonatomic, strong) NSStackView *rowsStack;
 @property (nonatomic, strong) NSTextField *emptyLabel;
 @property (nonatomic, strong) NSScrollView *errorScrollView;
@@ -349,7 +350,7 @@ static const CGFloat kRowHeight = 34;
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
     window.title = @"xboot";
-    window.minSize = NSMakeSize(520, 260);
+    window.minSize = NSMakeSize(520, 220);
     window.releasedWhenClosed = NO;
     self = [super initWithWindow:window];
     if (!self) return nil;
@@ -455,6 +456,7 @@ static const CGFloat kRowHeight = 34;
     self.rowsScrollView = [NSScrollView new];
     self.rowsScrollView.documentView = rowsDocument;
     self.rowsScrollView.hasVerticalScroller = YES;
+    self.rowsScrollView.autohidesScrollers = YES;
     self.rowsScrollView.drawsBackground = NO;
     self.rowsScrollView.borderType = NSNoBorder;
     [NSLayoutConstraint activateConstraints:@[
@@ -465,8 +467,11 @@ static const CGFloat kRowHeight = 34;
         [rowsDocument.widthAnchor constraintEqualToAnchor:self.rowsScrollView.contentView.widthAnchor],
     ]];
 
+    // Low priority: the list is the only thing allowed to absorb extra height.
     self.rowsHeightConstraint = [self.rowsScrollView.heightAnchor constraintEqualToConstant:60];
+    self.rowsHeightConstraint.priority = NSLayoutPriorityDefaultLow;
     self.rowsHeightConstraint.active = YES;
+    [self.rowsScrollView.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
 
     self.emptyLabel = [NSTextField labelWithString:@"还没有项目。点 ＋ 选择一个 .xcodeproj 或 .xcworkspace。"];
     self.emptyLabel.font = [NSFont systemFontOfSize:12];
@@ -482,13 +487,17 @@ static const CGFloat kRowHeight = 34;
     self.errorScrollView = [NSScrollView new];
     self.errorScrollView.documentView = self.errorTextView;
     self.errorScrollView.hasVerticalScroller = YES;
+    self.errorScrollView.autohidesScrollers = YES;
     self.errorScrollView.drawsBackground = NO;
     self.errorScrollView.borderType = NSNoBorder;
     self.errorScrollView.alphaValue = 0;
-    [self.errorScrollView.heightAnchor constraintEqualToConstant:120].active = YES;
+    self.errorHeightConstraint = [self.errorScrollView.heightAnchor constraintEqualToConstant:80];
+    self.errorHeightConstraint.active = YES;
 
+    // The error pane lives outside the stack: inside it, a changing height made
+    // the stack redistribute space and the rows jump.
     NSStackView *stack = [NSStackView stackViewWithViews:@[
-        toolbar, self.pathLabel, topSeparator, self.rowsScrollView, self.emptyLabel, bottomSeparator, self.errorScrollView
+        toolbar, self.pathLabel, topSeparator, self.rowsScrollView, self.emptyLabel, bottomSeparator
     ]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
@@ -497,18 +506,32 @@ static const CGFloat kRowHeight = 34;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:stack];
 
+    self.errorScrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:self.errorScrollView];
+
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:16],
         [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
         [stack.topAnchor constraintEqualToAnchor:content.topAnchor constant:14],
-        [stack.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-14],
+        [stack.bottomAnchor constraintEqualToAnchor:self.errorScrollView.topAnchor constant:-8],
+
+        [self.errorScrollView.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:16],
+        [self.errorScrollView.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
+        [self.errorScrollView.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-14],
+
         [toolbar.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [self.pathLabel.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [topSeparator.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [self.rowsScrollView.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [bottomSeparator.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.errorScrollView.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
     ]];
+
+    // Only the row list may absorb spare height.
+    for (NSView *view in stack.arrangedSubviews) {
+        if (view == self.rowsScrollView) continue;
+        [view setContentHuggingPriority:NSLayoutPriorityRequired
+                         forOrientation:NSLayoutConstraintOrientationVertical];
+    }
 }
 
 - (NSBox *)separator {
@@ -669,11 +692,13 @@ static const CGFloat kRowHeight = 34;
 - (void)updateRowsHeight {
     NSScreen *screen = self.window.screen ?: NSScreen.mainScreen;
     CGFloat screenHeight = screen.visibleFrame.size.height;
+    // Before the window is on screen, -screen is nil and this would clamp the
+    // list to 60pt, which shows a scroller and cuts the last row in half.
+    if (!isfinite(screenHeight) || screenHeight < 400) screenHeight = 900;
 
     CGFloat rows = self.rowsStack.fittingSize.height;
     if (!isfinite(rows) || rows < 1) rows = 60;
-    // Reserve room for the toolbar, path, separators and the error pane.
-    self.rowsHeightConstraint.constant = MIN(rows, MAX(60, screenHeight - 340));
+    self.rowsHeightConstraint.constant = MIN(rows + 2, MAX(60, screenHeight - 340));
 }
 
 - (NSRect)windowFrameFittingContent {
@@ -682,6 +707,7 @@ static const CGFloat kRowHeight = 34;
 
     NSScreen *screen = self.window.screen ?: NSScreen.mainScreen;
     CGFloat screenHeight = screen.visibleFrame.size.height;
+    if (!isfinite(screenHeight) || screenHeight < 400) screenHeight = 900;
     CGFloat contentHeight = self.window.contentView.fittingSize.height;
     if (!isfinite(contentHeight) || contentHeight < 1) return self.window.frame;
     contentHeight = MIN(MAX(contentHeight, 220), screenHeight - 80);
@@ -698,19 +724,19 @@ static const CGFloat kRowHeight = 34;
     [self.window setFrame:[self windowFrameFittingContent] display:YES];
 }
 
-/// The pane keeps its slot and only fades. Resizing the window between the two
-/// states is what made the rows jump.
+/// The pane owns a fixed slot so the window never changes height during a build;
+/// only its contents fade. Resizing it earlier made the rows jump.
 - (void)setErrorPaneVisible:(BOOL)visible animated:(BOOL)animated {
-    CGFloat target = visible ? 1 : 0;
-    if (fabs(self.errorScrollView.alphaValue - target) < 0.01) return;
+    CGFloat alpha = visible ? 1 : 0;
+    if (fabs(self.errorScrollView.alphaValue - alpha) < 0.01) return;
     if (!animated) {
-        self.errorScrollView.alphaValue = target;
+        self.errorScrollView.alphaValue = alpha;
         return;
     }
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
         ctx.duration = visible ? 0.2 : 0.15;
         ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
-        [self.errorScrollView.animator setAlphaValue:target];
+        [self.errorScrollView.animator setAlphaValue:alpha];
     }];
 }
 
