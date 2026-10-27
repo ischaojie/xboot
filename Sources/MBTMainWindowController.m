@@ -9,6 +9,12 @@
 #import <math.h>
 
 static const CGFloat kWindowWidth = 560;
+
+/// Honour "Reduce motion": keep the state change, drop the transition.
+static CGFloat MBTMotionDuration(CGFloat duration) {
+    if ([NSWorkspace sharedWorkspace].accessibilityDisplayShouldReduceMotion) return 0;
+    return duration;
+}
 static const CGFloat kRowHeight = 34;
 
 @interface MBTFlippedView : NSView
@@ -294,9 +300,13 @@ static const CGFloat kRowHeight = 34;
     NSString *next = text ?: @"";
     if ([_statusLabel.stringValue isEqualToString:next]) return;
     _statusLabel.stringValue = next;
-    _statusLabel.alphaValue = 0;
+
+    // Only restart the fade from zero when the label is at rest. During a burst
+    // of compiler diagnostics the text changes every few milliseconds, and
+    // resetting alpha each time reads as a flicker.
+    if (_statusLabel.alphaValue > 0.99) _statusLabel.alphaValue = 0;
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = 0.09;
+        ctx.duration = MBTMotionDuration(0.09);
         ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
         [_statusLabel.animator setAlphaValue:1];
     }];
@@ -304,7 +314,7 @@ static const CGFloat kRowHeight = 34;
 
 - (void)fadeOutStatus {
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = 0.15;
+        ctx.duration = MBTMotionDuration(0.15);
         [_statusLabel.animator setAlphaValue:0];
     } completionHandler:^{
         _statusLabel.stringValue = @"";
@@ -340,6 +350,8 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSTextView *errorTextView;
 @property (nonatomic, strong) MBTTargetRow *activeRow;
 @property (nonatomic) BOOL hasPlacedWindow;
+@property (nonatomic) BOOL errorPaneVisible;
+@property (nonatomic) NSUInteger runGeneration;
 @end
 
 @implementation MBTMainWindowController
@@ -656,15 +668,18 @@ static const CGFloat kRowHeight = 34;
     if (!visible && view.hidden) return;
     if (visible) {
         if (!view.hidden && view.alphaValue > 0.99) return;
+        if (view.hidden) view.alphaValue = 0;
         view.hidden = NO;
     }
-    view.alphaValue = visible ? 0 : 1;
+    // Animate to the target instead of snapping to the opposite extreme first:
+    // repeated calls then retarget the running animation rather than restart it.
+    BOOL hiding = !visible;
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = 0.15;
+        ctx.duration = MBTMotionDuration(0.15);
         ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
         [view.animator setAlphaValue:(visible ? 1 : 0)];
     } completionHandler:^{
-        if (!visible) view.hidden = YES;
+        if (hiding) view.hidden = YES;
     }];
 }
 
@@ -756,13 +771,14 @@ static const CGFloat kRowHeight = 34;
 /// only its contents fade. Resizing it earlier made the rows jump.
 - (void)setErrorPaneVisible:(BOOL)visible animated:(BOOL)animated {
     CGFloat alpha = visible ? 1 : 0;
-    if (fabs(self.errorScrollView.alphaValue - alpha) < 0.01) return;
+    if (self.errorPaneVisible == visible) return;
+    self.errorPaneVisible = visible;
     if (!animated) {
         self.errorScrollView.alphaValue = alpha;
         return;
     }
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = visible ? 0.2 : 0.15;
+        ctx.duration = MBTMotionDuration(visible ? 0.2 : 0.15);
         ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
         [self.errorScrollView.animator setAlphaValue:alpha];
     }];
@@ -843,6 +859,7 @@ static const CGFloat kRowHeight = 34;
 
 - (void)runTarget:(MBTTarget *)target {
     if (self.runner.isRunning) return;
+    self.runGeneration++;
 
     [self.diagnostics removeAllObjects];
     [self renderDiagnostics];
@@ -900,6 +917,7 @@ static const CGFloat kRowHeight = 34;
 
 - (void)finishWithSuccess:(BOOL)success {
     MBTTargetRow *row = self.activeRow;
+    NSUInteger generation = self.runGeneration;
     [self setRowsEnabled:YES except:nil];
     self.activeRow = nil;
 
@@ -909,7 +927,7 @@ static const CGFloat kRowHeight = 34;
         // A permanent "已启动" becomes stale noise; let the row return to rest.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            if (!self.runner.isRunning && self.activeRow == nil) [row fadeOutStatus];
+            if (generation == self.runGeneration && !self.runner.isRunning) [row fadeOutStatus];
         });
     } else {
         [row setBusy:NO
