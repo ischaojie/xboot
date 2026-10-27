@@ -856,7 +856,7 @@ static const CGFloat kRowHeight = 34;
             if (event.phaseStarted) [self.activeRow setBusy:YES status:[self textForPhase:event.phase]];
             break;
         case MBTEventKindDiagnostic:
-            if ([event.severity isEqualToString:@"error"] && [self isDisplayableDiagnostic:event]) {
+            if (event.isDisplayable) {
                 [self.diagnostics addObject:event];
                 [self renderDiagnostics];
                 [self setErrorPaneVisible:YES animated:YES];
@@ -916,9 +916,6 @@ static const CGFloat kRowHeight = 34;
     return [message componentsSeparatedByString:@"\n"].firstObject ?: @"";
 }
 
-- (BOOL)isDisplayableDiagnostic:(MBTBuildEvent *)event {
-    return event.filePath.length > 0 || ![[self firstLineOf:event.message] hasPrefix:@"|"];
-}
 
 - (void)renderDiagnostics {
     NSMutableString *text = [NSMutableString string];

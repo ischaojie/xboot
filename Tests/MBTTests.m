@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import "MBTBuildEvent.h"
+#import "MBTCLI.h"
 #import "MBTLineBuffer.h"
 #import "MBTProject.h"
 #import "MBTProjectStore.h"
@@ -199,6 +200,73 @@ static void test_line_buffer_splits_across_chunks(void) {
     EXPECT([String(lines[0]) isEqualToString:@"tail"]);
 }
 
+static void test_platform_detection(void) {
+    EXPECT([[MBTCLI platformFromBuildSettings:@{ @"PLATFORM_NAME": @"macosx" }] isEqualToString:@"macos"]);
+    EXPECT([[MBTCLI platformFromBuildSettings:@{ @"PLATFORM_NAME": @"iphoneos" }] isEqualToString:@"ios"]);
+    EXPECT([[MBTCLI platformFromBuildSettings:@{ @"PLATFORM_NAME": @"iphonesimulator" }] isEqualToString:@"ios"]);
+    EXPECT([MBTCLI platformFromBuildSettings:@{}] == nil);
+    EXPECT([MBTCLI platformFromBuildSettings:@{ @"PLATFORM_NAME": @"" }] == nil);
+    // An aggregate scheme reports no platform at all.
+    EXPECT([MBTCLI platformFromBuildSettings:@{ @"PRODUCT_TYPE": @"com.apple.product-type.framework" }] == nil);
+}
+
+static MBTBuildEvent *Diagnostic(NSString *json) {
+    return [MBTBuildEvent eventFromJSONLine:Line(json)];
+}
+
+static void test_diagnostic_display_filter(void) {
+    MBTBuildEvent *withLocation = Diagnostic(@"{\"event\":\"build-result.compiler-diagnostic\","
+                                             @"\"severity\":\"error\",\"message\":\"bad\","
+                                             @"\"location\":\"/tmp/A.swift:3\"}");
+    EXPECT(withLocation.isDisplayable);
+
+    // xcodebuild emits continuation lines without a location; they duplicate the
+    // error above them and must not reach the list.
+    MBTBuildEvent *continuation = Diagnostic(@"{\"event\":\"build-result.compiler-diagnostic\","
+                                             @"\"severity\":\"error\",\"message\":\"| `- error: bad\"}");
+    EXPECT(!continuation.isDisplayable);
+
+    // A real error can still lack a location (linker, signing).
+    MBTBuildEvent *noLocation = Diagnostic(@"{\"event\":\"build-result.compiler-diagnostic\","
+                                           @"\"severity\":\"error\",\"message\":\"linker failed\"}");
+    EXPECT(noLocation.isDisplayable);
+
+    MBTBuildEvent *warning = Diagnostic(@"{\"event\":\"build-result.compiler-diagnostic\","
+                                        @"\"severity\":\"warning\",\"message\":\"meh\","
+                                        @"\"location\":\"/tmp/A.swift:1\"}");
+    EXPECT(!warning.isDisplayable);
+
+    EXPECT(![MBTBuildEvent eventFromJSONLine:Line(@"{\"event\":\"build-result.build-summary\",\"status\":\"FAILED\"}")].isDisplayable);
+}
+
+static void test_location_with_column(void) {
+    MBTBuildEvent *event = Diagnostic(@"{\"event\":\"build-result.compiler-diagnostic\","
+                                      @"\"severity\":\"error\",\"message\":\"m\","
+                                      @"\"location\":\"/tmp/A.swift:11:30\"}");
+    EXPECT([event.filePath isEqualToString:@"/tmp/A.swift"]);
+    EXPECT(event.lineNumber == 11);
+}
+
+static void test_target_round_trip(void) {
+    MBTTarget *target = [MBTTarget targetWithScheme:@"App"];
+    target.platform = @"macos";
+    target.probed = YES;
+    target.kindLabel = nil;
+
+    MBTTarget *copy = [MBTTarget targetWithDictionary:[target dictionaryRepresentation]];
+    EXPECT([copy.scheme isEqualToString:@"App"]);
+    EXPECT([copy.platform isEqualToString:@"macos"]);
+    EXPECT(copy.probed);
+    EXPECT([copy isMacOS]);
+
+    MBTTarget *skipped = [MBTTarget targetWithScheme:@"Widget"];
+    skipped.probed = YES;
+    skipped.kindLabel = @"extension";
+    MBTTarget *skippedCopy = [MBTTarget targetWithDictionary:[skipped dictionaryRepresentation]];
+    EXPECT(!skippedCopy.isMacOS);
+    EXPECT([skippedCopy.kindLabel isEqualToString:@"extension"]);
+}
+
 int main(void) {
     @autoreleasepool {
         test_parses_build_stage();
@@ -209,6 +277,10 @@ int main(void) {
         test_store_add_and_order();
         test_store_migrates_legacy_single_scheme();
         test_simulator_favorites();
+        test_platform_detection();
+        test_diagnostic_display_filter();
+        test_location_with_column();
+        test_target_round_trip();
         test_line_buffer_splits_across_chunks();
         printf("%d checks, %d failures\n", gChecks, gFailures);
         return gFailures > 0 ? 1 : 0;

@@ -19,5 +19,8 @@ typedef NS_ENUM(NSInteger, MBTEventKind) {
 @property (nonatomic) BOOL phaseStarted;
 @property (nonatomic, copy) NSString *status;
 @property (nonatomic) NSInteger durationMs;
+/// YES for errors worth showing: severity error, and either a source location or
+/// a message that is not an xcodebuild continuation line.
+@property (nonatomic, readonly) BOOL isDisplayable;
 + (instancetype)eventFromJSONLine:(NSData *)line;
 @end

@@ -26,6 +26,13 @@ static void MBTSplitLocation(NSString *location, NSString **outPath, NSInteger *
 
 @implementation MBTBuildEvent
 
+- (BOOL)isDisplayable {
+    if (self.kind != MBTEventKindDiagnostic) return NO;
+    if (![self.severity isEqualToString:@"error"]) return NO;
+    NSString *firstLine = [self.message componentsSeparatedByString:@"\n"].firstObject ?: @"";
+    return self.filePath.length > 0 || ![firstLine hasPrefix:@"|"];
+}
+
 + (instancetype)eventFromJSONLine:(NSData *)line {
     if (line.length == 0) return nil;
     id object = [NSJSONSerialization JSONObjectWithData:line options:0 error:NULL];
