@@ -4,6 +4,7 @@
 #import "MBTCLI.h"
 #import "MBTProject.h"
 #import "MBTTarget.h"
+#import <QuartzCore/QuartzCore.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <math.h>
 
@@ -22,6 +23,7 @@ static const CGFloat kRowHeight = 34;
 /// A menu row with the device name on the left and a clickable star on the right.
 @interface MBTDeviceMenuItemView : NSView
 @property (nonatomic, readonly, getter=isFavorite) BOOL favorite;
+@property (nonatomic, weak) NSPopUpButton *popUp;
 @property (nonatomic, copy) void (^onToggleFavorite)(void);
 - (instancetype)initWithTitle:(NSString *)title favorite:(BOOL)favorite selected:(BOOL)selected;
 @end
@@ -76,8 +78,15 @@ static const CGFloat kRowHeight = 34;
 
 - (void)toggleFavorite:(id)sender {
     [self setFavorite:!self.favorite];
-    // Let the menu stay open so several devices can be pinned in one pass.
     if (self.onToggleFavorite) self.onToggleFavorite();
+
+    // Clicking inside a menu cancels tracking; reopen it so several devices can
+    // be pinned in one pass.
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSPopUpButton *popUp = weakSelf.popUp;
+        if (popUp && !popUp.menu.highlightedItem) [popUp performClick:nil];
+    });
 }
 
 @end
@@ -135,6 +144,7 @@ static const CGFloat kRowHeight = 34;
 
     NSButton *run = [NSButton buttonWithTitle:@"▶ Run" target:self action:@selector(run:)];
     run.bezelStyle = NSBezelStyleRounded;
+    run.bezelColor = NSColor.controlAccentColor;
     run.controlSize = NSControlSizeSmall;
     run.font = [NSFont systemFontOfSize:11];
     [run.widthAnchor constraintGreaterThanOrEqualToConstant:66].active = YES;
@@ -190,6 +200,7 @@ static const CGFloat kRowHeight = 34;
         __strong typeof(weakSelf) self = weakSelf;
         if (self.onToggleFavorite) self.onToggleFavorite(self.target, simulatorID);
     };
+    view.popUp = self.simulatorPopUp;
     item.view = view;
     return item;
 }
@@ -250,31 +261,59 @@ static const CGFloat kRowHeight = 34;
         self.simulatorPopUp.hidden = YES;
         _platformLabel.hidden = NO;
         _platformLabel.stringValue = target.probed ? (target.kindLabel ?: @"不可运行") : @"探测中…";
-        self.runButton.enabled = NO;
+        [self setRunEnabled:NO];
         return;
     }
 
     _platformLabel.hidden = !target.isMacOS;
     _platformLabel.stringValue = target.isMacOS ? @"macOS" : @"";
     self.simulatorPopUp.hidden = target.isMacOS;
-    self.runButton.enabled = YES;
+    [self setRunEnabled:YES];
+}
+
+- (void)setRunEnabled:(BOOL)enabled {
+    self.runButton.enabled = enabled;
+    self.runButton.bezelColor = enabled ? NSColor.controlAccentColor : nil;
 }
 
 - (void)setBusy:(BOOL)busy status:(NSString *)status {
-    self.runButton.enabled = !busy;
+    [self setRunEnabled:!busy];
     if (busy) {
         [self.spinner startAnimation:nil];
         self.runButton.title = @"取消";
-        self.runButton.enabled = YES;
+        [self setRunEnabled:YES];
     } else {
         [self.spinner stopAnimation:nil];
         self.runButton.title = @"▶ Run";
     }
-    _statusLabel.stringValue = status ?: @"";
+    [self setStatusText:status];
+}
+
+/// Stages change every few hundred milliseconds; a hard swap reads as flicker.
+- (void)setStatusText:(NSString *)text {
+    NSString *next = text ?: @"";
+    if ([_statusLabel.stringValue isEqualToString:next]) return;
+    _statusLabel.stringValue = next;
+    _statusLabel.alphaValue = 0;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+        ctx.duration = 0.09;
+        ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
+        [_statusLabel.animator setAlphaValue:1];
+    }];
+}
+
+- (void)fadeOutStatus {
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+        ctx.duration = 0.15;
+        [_statusLabel.animator setAlphaValue:0];
+    } completionHandler:^{
+        _statusLabel.stringValue = @"";
+        _statusLabel.alphaValue = 1;
+    }];
 }
 
 - (void)setIdleStatus:(NSString *)status {
-    _statusLabel.stringValue = status ?: @"";
+    [self setStatusText:status];
 }
 
 @end
@@ -291,7 +330,8 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSTextField *pathLabel;
 @property (nonatomic, strong) NSPopUpButton *projectPopUp;
 @property (nonatomic, strong) NSTextField *configLabel;
-@property (nonatomic, strong) NSView *rowsContainer;
+@property (nonatomic, strong) NSScrollView *rowsScrollView;
+@property (nonatomic, strong) NSLayoutConstraint *rowsHeightConstraint;
 @property (nonatomic, strong) NSStackView *rowsStack;
 @property (nonatomic, strong) NSTextField *emptyLabel;
 @property (nonatomic, strong) NSScrollView *errorScrollView;
@@ -407,6 +447,27 @@ static const CGFloat kRowHeight = 34;
     self.rowsStack.spacing = 0;
     self.rowsStack.translatesAutoresizingMaskIntoConstraints = NO;
 
+    // Target lists can outgrow the window; scroll instead of clipping.
+    MBTFlippedView *rowsDocument = [MBTFlippedView new];
+    rowsDocument.translatesAutoresizingMaskIntoConstraints = NO;
+    [rowsDocument addSubview:self.rowsStack];
+
+    self.rowsScrollView = [NSScrollView new];
+    self.rowsScrollView.documentView = rowsDocument;
+    self.rowsScrollView.hasVerticalScroller = YES;
+    self.rowsScrollView.drawsBackground = NO;
+    self.rowsScrollView.borderType = NSNoBorder;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.rowsStack.topAnchor constraintEqualToAnchor:rowsDocument.topAnchor],
+        [self.rowsStack.leadingAnchor constraintEqualToAnchor:rowsDocument.leadingAnchor],
+        [self.rowsStack.trailingAnchor constraintEqualToAnchor:rowsDocument.trailingAnchor],
+        [self.rowsStack.bottomAnchor constraintEqualToAnchor:rowsDocument.bottomAnchor],
+        [rowsDocument.widthAnchor constraintEqualToAnchor:self.rowsScrollView.contentView.widthAnchor],
+    ]];
+
+    self.rowsHeightConstraint = [self.rowsScrollView.heightAnchor constraintEqualToConstant:60];
+    self.rowsHeightConstraint.active = YES;
+
     self.emptyLabel = [NSTextField labelWithString:@"还没有项目。点 ＋ 选择一个 .xcodeproj 或 .xcworkspace。"];
     self.emptyLabel.font = [NSFont systemFontOfSize:12];
     self.emptyLabel.textColor = NSColor.secondaryLabelColor;
@@ -416,18 +477,18 @@ static const CGFloat kRowHeight = 34;
     self.errorTextView.editable = NO;
     self.errorTextView.drawsBackground = NO;
     self.errorTextView.font = [NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightRegular];
-    self.errorTextView.textContainerInset = NSMakeSize(0, 4);
+    self.errorTextView.textContainerInset = NSMakeSize(2, 8);
 
     self.errorScrollView = [NSScrollView new];
     self.errorScrollView.documentView = self.errorTextView;
     self.errorScrollView.hasVerticalScroller = YES;
     self.errorScrollView.drawsBackground = NO;
     self.errorScrollView.borderType = NSNoBorder;
-    self.errorScrollView.hidden = YES;
+    self.errorScrollView.alphaValue = 0;
     [self.errorScrollView.heightAnchor constraintEqualToConstant:120].active = YES;
 
     NSStackView *stack = [NSStackView stackViewWithViews:@[
-        toolbar, self.pathLabel, topSeparator, self.rowsStack, self.emptyLabel, bottomSeparator, self.errorScrollView
+        toolbar, self.pathLabel, topSeparator, self.rowsScrollView, self.emptyLabel, bottomSeparator, self.errorScrollView
     ]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
@@ -444,7 +505,7 @@ static const CGFloat kRowHeight = 34;
         [toolbar.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [self.pathLabel.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [topSeparator.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.rowsStack.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
+        [self.rowsScrollView.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [bottomSeparator.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [self.errorScrollView.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
     ]];
@@ -544,6 +605,22 @@ static const CGFloat kRowHeight = 34;
     });
 }
 
+- (void)crossfadeView:(NSView *)view visible:(BOOL)visible {
+    if (!visible && view.hidden) return;
+    if (visible) {
+        if (!view.hidden && view.alphaValue > 0.99) return;
+        view.hidden = NO;
+    }
+    view.alphaValue = visible ? 0 : 1;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+        ctx.duration = 0.15;
+        ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
+        [view.animator setAlphaValue:(visible ? 1 : 0)];
+    } completionHandler:^{
+        if (!visible) view.hidden = YES;
+    }];
+}
+
 - (void)rebuildRows {
     for (NSView *view in self.rowsStack.arrangedSubviews) {
         [self.rowsStack removeArrangedSubview:view];
@@ -552,19 +629,19 @@ static const CGFloat kRowHeight = 34;
 
     BOOL hasTargets = self.project != nil && self.project.targets.count > 0;
     if (!self.project) {
-        self.emptyLabel.hidden = NO;
         self.emptyLabel.stringValue = @"还没有项目。点 ＋ 选择一个 .xcodeproj 或 .xcworkspace。";
-        self.rowsStack.hidden = YES;
+        [self crossfadeView:self.emptyLabel visible:YES];
+        [self crossfadeView:self.rowsScrollView visible:NO];
         return;
     }
     if (!hasTargets) {
-        self.emptyLabel.hidden = NO;
         self.emptyLabel.stringValue = @"正在探测 targets…";
-        self.rowsStack.hidden = YES;
+        [self crossfadeView:self.emptyLabel visible:YES];
+        [self crossfadeView:self.rowsScrollView visible:NO];
         return;
     }
-    self.emptyLabel.hidden = YES;
-    self.rowsStack.hidden = NO;
+    [self crossfadeView:self.emptyLabel visible:NO];
+    [self crossfadeView:self.rowsScrollView visible:YES];
 
     for (MBTTarget *target in self.project.targets) {
         MBTTargetRow *row = [[MBTTargetRow alloc] initWithTarget:target];
@@ -589,13 +666,52 @@ static const CGFloat kRowHeight = 34;
     [self resizeWindowToFit];
 }
 
+- (void)updateRowsHeight {
+    NSScreen *screen = self.window.screen ?: NSScreen.mainScreen;
+    CGFloat screenHeight = screen.visibleFrame.size.height;
+
+    CGFloat rows = self.rowsStack.fittingSize.height;
+    if (!isfinite(rows) || rows < 1) rows = 60;
+    // Reserve room for the toolbar, path, separators and the error pane.
+    self.rowsHeightConstraint.constant = MIN(rows, MAX(60, screenHeight - 340));
+}
+
+- (NSRect)windowFrameFittingContent {
+    [self updateRowsHeight];
+    [self.window.contentView layoutSubtreeIfNeeded];
+
+    NSScreen *screen = self.window.screen ?: NSScreen.mainScreen;
+    CGFloat screenHeight = screen.visibleFrame.size.height;
+    CGFloat contentHeight = self.window.contentView.fittingSize.height;
+    if (!isfinite(contentHeight) || contentHeight < 1) return self.window.frame;
+    contentHeight = MIN(MAX(contentHeight, 220), screenHeight - 80);
+
+    NSRect frame = self.window.frame;
+    CGFloat chrome = frame.size.height - self.window.contentView.frame.size.height;
+    CGFloat newHeight = contentHeight + chrome;
+    frame.origin.y += frame.size.height - newHeight;
+    frame.size.height = newHeight;
+    return frame;
+}
+
 - (void)resizeWindowToFit {
-    NSWindow *window = self.window;
-    if (!window) return;
-    [window.contentView layoutSubtreeIfNeeded];
-    CGFloat height = window.contentView.fittingSize.height;
-    if (!isfinite(height) || height < 1 || height > 2000) return;
-    [window setContentSize:NSMakeSize(kWindowWidth, MIN(MAX(height, 220), 760))];
+    [self.window setFrame:[self windowFrameFittingContent] display:YES];
+}
+
+/// The pane keeps its slot and only fades. Resizing the window between the two
+/// states is what made the rows jump.
+- (void)setErrorPaneVisible:(BOOL)visible animated:(BOOL)animated {
+    CGFloat target = visible ? 1 : 0;
+    if (fabs(self.errorScrollView.alphaValue - target) < 0.01) return;
+    if (!animated) {
+        self.errorScrollView.alphaValue = target;
+        return;
+    }
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+        ctx.duration = visible ? 0.2 : 0.15;
+        ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
+        [self.errorScrollView.animator setAlphaValue:target];
+    }];
 }
 
 #pragma mark - Actions
@@ -676,7 +792,7 @@ static const CGFloat kRowHeight = 34;
 
     [self.diagnostics removeAllObjects];
     [self renderDiagnostics];
-    self.errorScrollView.hidden = YES;
+    [self setErrorPaneVisible:NO animated:YES];
 
     MBTTargetRow *row = [self rowForTarget:target];
     self.activeRow = row;
@@ -713,6 +829,7 @@ static const CGFloat kRowHeight = 34;
             if ([event.severity isEqualToString:@"error"] && [self isDisplayableDiagnostic:event]) {
                 [self.diagnostics addObject:event];
                 [self renderDiagnostics];
+                [self setErrorPaneVisible:YES animated:YES];
                 [self.activeRow setBusy:YES
                                  status:[NSString stringWithFormat:@"%lu 个错误", (unsigned long)self.diagnostics.count]];
             }
@@ -728,24 +845,39 @@ static const CGFloat kRowHeight = 34;
 }
 
 - (void)finishWithSuccess:(BOOL)success {
-    if (success) {
-        [self.activeRow setBusy:NO status:@"已启动"];
-        self.errorScrollView.hidden = YES;
-    } else {
-        [self.activeRow setBusy:NO
-                         status:self.diagnostics.count
-                                    ? [NSString stringWithFormat:@"失败 · %lu 个错误", (unsigned long)self.diagnostics.count]
-                                    : @"失败"];
-        self.errorScrollView.hidden = self.diagnostics.count == 0;
-    }
+    MBTTargetRow *row = self.activeRow;
     [self setRowsEnabled:YES except:nil];
     self.activeRow = nil;
+
+    if (success) {
+        [row setBusy:NO status:@"已启动"];
+        [self setErrorPaneVisible:NO animated:YES];
+        // A permanent "已启动" becomes stale noise; let the row return to rest.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (!self.runner.isRunning && self.activeRow == nil) [row fadeOutStatus];
+        });
+    } else {
+        [row setBusy:NO
+               status:self.diagnostics.count
+                          ? [NSString stringWithFormat:@"失败 · %lu 个错误", (unsigned long)self.diagnostics.count]
+                          : @"失败"];
+        [self setErrorPaneVisible:(self.diagnostics.count > 0) animated:YES];
+    }
 }
 
 - (void)setRowsEnabled:(BOOL)enabled except:(MBTTargetRow *)active {
     for (MBTTargetRow *row in self.rowsStack.arrangedSubviews) {
         if (![row isKindOfClass:[MBTTargetRow class]] || row == active) continue;
-        row.runButton.enabled = enabled && row.target.platform.length > 0;
+        BOOL runnable = row.target.platform.length > 0;
+        [row setRunEnabled:enabled && runnable];
+        if (!enabled) {
+            row.runButton.toolTip = @"另一个构建正在进行";
+        } else if (!runnable) {
+            row.runButton.toolTip = @"这个 scheme 不构建可运行的应用";
+        } else {
+            row.runButton.toolTip = nil;
+        }
     }
 }
 
