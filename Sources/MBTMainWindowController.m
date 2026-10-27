@@ -294,6 +294,8 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) MBTProject *project;
 @property (nonatomic, strong) MBTBuildRunner *runner;
 @property (nonatomic, strong) NSMutableArray<MBTBuildEvent *> *diagnostics;
+@property (nonatomic, strong) NSMutableArray<NSString *> *logLines;
+@property (nonatomic, strong) NSDate *buildStartTime;
 @property (nonatomic, strong) NSArray<NSDictionary *> *simulators;
 
 @property (nonatomic, strong) NSTextField *pathLabel;
@@ -302,14 +304,13 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSScrollView *rowsScrollView;
 @property (nonatomic, strong) NSLayoutConstraint *rowsHeightConstraint;
 @property (nonatomic, strong) NSStackView *rootStack;
-@property (nonatomic, strong) NSLayoutConstraint *errorHeightConstraint;
 @property (nonatomic, strong) NSStackView *rowsStack;
 @property (nonatomic, strong) NSTextField *emptyLabel;
-@property (nonatomic, strong) NSScrollView *errorScrollView;
-@property (nonatomic, strong) NSTextView *errorTextView;
+@property (nonatomic, strong) NSButton *logButton;
+@property (nonatomic, strong) NSPopover *logPopover;
+@property (nonatomic, strong) NSTextView *logTextView;
 @property (nonatomic, strong) MBTTargetRow *activeRow;
 @property (nonatomic) BOOL hasPlacedWindow;
-@property (nonatomic) BOOL errorPaneVisible;
 @property (nonatomic) NSUInteger runGeneration;
 @end
 
@@ -322,15 +323,17 @@ static const CGFloat kRowHeight = 34;
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
     window.title = @"xboot";
-    window.minSize = NSMakeSize(520, 220);
+    window.minSize = NSMakeSize(520, 180);
     window.releasedWhenClosed = NO;
     self = [super initWithWindow:window];
     if (!self) return nil;
     _store = store;
     _runner = [MBTBuildRunner new];
     _diagnostics = [NSMutableArray array];
+    _logLines = [NSMutableArray array];
     _simulators = @[];
     [self buildInterface];
+    [self setupLogPopover];
     [self reload];
     [self loadSimulators];
     return self;
@@ -397,8 +400,14 @@ static const CGFloat kRowHeight = 34;
     self.configLabel.font = [NSFont systemFontOfSize:11];
     self.configLabel.textColor = NSColor.secondaryLabelColor;
 
+    self.logButton = [NSButton buttonWithTitle:@"Log" target:self action:@selector(toggleLog:)];
+    self.logButton.bezelStyle = NSBezelStyleRounded;
+    self.logButton.controlSize = NSControlSizeSmall;
+    self.logButton.font = [NSFont systemFontOfSize:11];
+    self.logButton.toolTip = @"构建输出";
+
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
-        self.projectPopUp, add, remove, refresh, NSView.new, self.configLabel
+        self.projectPopUp, add, remove, refresh, NSView.new, self.logButton, self.configLabel
     ]];
     toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     toolbar.alignment = NSLayoutAttributeCenterY;
@@ -450,24 +459,6 @@ static const CGFloat kRowHeight = 34;
     self.emptyLabel.textColor = NSColor.secondaryLabelColor;
 
 
-    self.errorTextView = [NSTextView new];
-    self.errorTextView.editable = NO;
-    self.errorTextView.drawsBackground = NO;
-    self.errorTextView.font = [NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightRegular];
-    self.errorTextView.textContainerInset = NSMakeSize(2, 8);
-
-    self.errorScrollView = [NSScrollView new];
-    self.errorScrollView.documentView = self.errorTextView;
-    self.errorScrollView.hasVerticalScroller = YES;
-    self.errorScrollView.autohidesScrollers = YES;
-    self.errorScrollView.drawsBackground = NO;
-    self.errorScrollView.borderType = NSNoBorder;
-    self.errorScrollView.alphaValue = 0;
-    self.errorHeightConstraint = [self.errorScrollView.heightAnchor constraintEqualToConstant:80];
-    self.errorHeightConstraint.active = YES;
-
-    // The error pane lives outside the stack: inside it, a changing height made
-    // the stack redistribute space and the rows jump.
     NSStackView *stack = [NSStackView stackViewWithViews:@[
         toolbar, self.pathLabel, topSeparator, self.rowsScrollView, self.emptyLabel, bottomSeparator
     ]];
@@ -479,18 +470,13 @@ static const CGFloat kRowHeight = 34;
     [content addSubview:stack];
     self.rootStack = stack;
 
-    self.errorScrollView.translatesAutoresizingMaskIntoConstraints = NO;
-    [content addSubview:self.errorScrollView];
-
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:16],
         [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
         [stack.topAnchor constraintEqualToAnchor:content.topAnchor constant:14],
-        [stack.bottomAnchor constraintEqualToAnchor:self.errorScrollView.topAnchor constant:-8],
-
-        [self.errorScrollView.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:16],
-        [self.errorScrollView.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
-        [self.errorScrollView.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-14],
+        // Not an equality: the stack must keep its natural height instead of
+        // stretching to fill a window that is briefly taller than its content.
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-14],
 
         [toolbar.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
         [self.pathLabel.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
@@ -715,7 +701,7 @@ static const CGFloat kRowHeight = 34;
     // tall as the window, so its fitting size never shrinks back.
     CGFloat stackHeight = self.rootStack.fittingSize.height;
     if (!isfinite(stackHeight) || stackHeight < 1) return self.window.frame;
-    CGFloat contentHeight = 14 + stackHeight + 8 + self.errorHeightConstraint.constant + 14;
+    CGFloat contentHeight = 14 + stackHeight + 14;
     contentHeight = MIN(MAX(contentHeight, 220), screenHeight - 80);
 
     NSRect frame = self.window.frame;
@@ -730,21 +716,73 @@ static const CGFloat kRowHeight = 34;
     [self.window setFrame:[self windowFrameFittingContent] display:YES];
 }
 
-/// The pane owns a fixed slot so the window never changes height during a build;
-/// only its contents fade. Resizing it earlier made the rows jump.
-- (void)setErrorPaneVisible:(BOOL)visible animated:(BOOL)animated {
-    CGFloat alpha = visible ? 1 : 0;
-    if (self.errorPaneVisible == visible) return;
-    self.errorPaneVisible = visible;
-    if (!animated) {
-        self.errorScrollView.alphaValue = alpha;
+- (void)setupLogPopover {
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 480, 260)];
+
+    self.logTextView = [NSTextView new];
+    self.logTextView.editable = NO;
+    self.logTextView.drawsBackground = NO;
+    self.logTextView.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    self.logTextView.textContainerInset = NSMakeSize(10, 10);
+
+    NSScrollView *scroll = [NSScrollView new];
+    scroll.documentView = self.logTextView;
+    scroll.hasVerticalScroller = YES;
+    scroll.autohidesScrollers = YES;
+    scroll.drawsBackground = NO;
+    scroll.borderType = NSNoBorder;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [container addSubview:scroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:container.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:container.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
+    ]];
+
+    NSViewController *controller = [NSViewController new];
+    controller.view = container;
+
+    self.logPopover = [NSPopover new];
+    self.logPopover.contentViewController = controller;
+    self.logPopover.behavior = NSPopoverBehaviorTransient;
+    self.logPopover.contentSize = NSMakeSize(480, 260);
+}
+
+- (void)toggleLog:(id)sender {
+    if (self.logPopover.isShown) {
+        [self.logPopover performClose:nil];
         return;
     }
-    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = MBTMotionDuration(visible ? 0.2 : 0.15);
-        ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
-        [self.errorScrollView.animator setAlphaValue:alpha];
-    }];
+    [self refreshLogContent];
+    [self.logPopover showRelativeToRect:self.logButton.bounds
+                                ofView:self.logButton
+                        preferredEdge:NSRectEdgeMaxY];
+}
+
+/// The button carries the error count, so a failed build is visible without
+/// dedicating a pane of the window to it.
+- (void)refreshLogButton {
+    NSUInteger count = self.diagnostics.count;
+    self.logButton.title = count ? [NSString stringWithFormat:@"Log · %lu", (unsigned long)count] : @"Log";
+    self.logButton.contentTintColor = count ? NSColor.systemRedColor : nil;
+    if (self.logPopover.isShown) [self refreshLogContent];
+}
+
+- (void)appendLogLine:(NSString *)line {
+    if (!line.length) return;
+    NSTimeInterval elapsed = self.buildStartTime ? -[self.buildStartTime timeIntervalSinceNow] : 0;
+    [self.logLines addObject:[NSString stringWithFormat:@"%6.1fs  %@", elapsed, line]];
+    if (self.logPopover.isShown) [self refreshLogContent];
+}
+
+- (void)refreshLogContent {
+    if (!self.logLines.count) {
+        self.logTextView.string = self.runner.isRunning ? @"构建中…" : @"还没有构建输出。";
+        return;
+    }
+    self.logTextView.string = [self.logLines componentsJoinedByString:@"\n"];
+    [self.logTextView scrollRangeToVisible:NSMakeRange(self.logTextView.string.length, 0)];
 }
 
 #pragma mark - Actions
@@ -827,8 +865,9 @@ static const CGFloat kRowHeight = 34;
     self.runGeneration++;
 
     [self.diagnostics removeAllObjects];
-    [self renderDiagnostics];
-    [self setErrorPaneVisible:NO animated:YES];
+    [self.logLines removeAllObjects];
+    self.buildStartTime = [NSDate date];
+    [self refreshLogButton];
 
     MBTTargetRow *row = [self rowForTarget:target];
     self.activeRow = row;
@@ -856,21 +895,27 @@ static const CGFloat kRowHeight = 34;
 - (void)handleEvent:(MBTBuildEvent *)event {
     switch (event.kind) {
         case MBTEventKindStage:
+            [self appendLogLine:[self textForStage:event.stage]];
             [self.activeRow setBusy:YES status:[self textForStage:event.stage]];
             break;
         case MBTEventKindPhase:
-            if (event.phaseStarted) [self.activeRow setBusy:YES status:[self textForPhase:event.phase]];
+            if (event.phaseStarted) {
+                [self appendLogLine:[self textForPhase:event.phase]];
+                [self.activeRow setBusy:YES status:[self textForPhase:event.phase]];
+            }
             break;
         case MBTEventKindDiagnostic:
             if (event.isDisplayable) {
                 [self.diagnostics addObject:event];
-                [self renderDiagnostics];
-                [self setErrorPaneVisible:YES animated:YES];
+                [self appendLogLine:[self formattedDiagnostic:event]];
+                [self refreshLogButton];
                 [self.activeRow setBusy:YES
                                  status:[NSString stringWithFormat:@"%lu 个错误", (unsigned long)self.diagnostics.count]];
             }
             break;
         case MBTEventKindSummary:
+            [self appendLogLine:[NSString stringWithFormat:@"%@ · %.1fs",
+                                 event.status, event.durationMs / 1000.0]];
             if ([event.status isEqualToString:@"FAILED"]) {
                 [self.activeRow setBusy:YES status:@"构建失败"];
             }
@@ -888,7 +933,7 @@ static const CGFloat kRowHeight = 34;
 
     if (success) {
         [row setBusy:NO status:@"已启动"];
-        [self setErrorPaneVisible:NO animated:YES];
+        [self refreshLogButton];
         // A permanent "已启动" becomes stale noise; let the row return to rest.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -899,7 +944,7 @@ static const CGFloat kRowHeight = 34;
                status:self.diagnostics.count
                           ? [NSString stringWithFormat:@"失败 · %lu 个错误", (unsigned long)self.diagnostics.count]
                           : @"失败"];
-        [self setErrorPaneVisible:(self.diagnostics.count > 0) animated:YES];
+        [self refreshLogButton];
     }
 }
 
@@ -923,16 +968,12 @@ static const CGFloat kRowHeight = 34;
 }
 
 
-- (void)renderDiagnostics {
-    NSMutableString *text = [NSMutableString string];
-    for (MBTBuildEvent *event in self.diagnostics) {
-        NSString *message = [self firstLineOf:event.message];
-        NSString *location = event.filePath.length
-            ? [NSString stringWithFormat:@"  %@:%ld", [event.filePath lastPathComponent], (long)event.lineNumber]
-            : @"";
-        [text appendFormat:@"%@\n%@\n\n", message, location];
-    }
-    self.errorTextView.string = text;
+- (NSString *)formattedDiagnostic:(MBTBuildEvent *)event {
+    NSString *message = [self firstLineOf:event.message];
+    NSString *location = event.filePath.length
+        ? [NSString stringWithFormat:@"  %@:%ld", [event.filePath lastPathComponent], (long)event.lineNumber]
+        : @"";
+    return [NSString stringWithFormat:@"error: %@\n%@", message, location];
 }
 
 - (NSString *)textForStage:(NSString *)stage {
