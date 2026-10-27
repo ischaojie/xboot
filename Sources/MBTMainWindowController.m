@@ -332,6 +332,7 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSTextField *configLabel;
 @property (nonatomic, strong) NSScrollView *rowsScrollView;
 @property (nonatomic, strong) NSLayoutConstraint *rowsHeightConstraint;
+@property (nonatomic, strong) NSStackView *rootStack;
 @property (nonatomic, strong) NSLayoutConstraint *errorHeightConstraint;
 @property (nonatomic, strong) NSStackView *rowsStack;
 @property (nonatomic, strong) NSTextField *emptyLabel;
@@ -505,6 +506,7 @@ static const CGFloat kRowHeight = 34;
     stack.spacing = 8;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:stack];
+    self.rootStack = stack;
 
     self.errorScrollView.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:self.errorScrollView];
@@ -568,9 +570,31 @@ static const CGFloat kRowHeight = 34;
 - (void)syncTargetsForProject:(MBTProject *)project {
     NSString *path = project.path;
     __weak typeof(self) weakSelf = self;
+
+    // xcodebuild can block on a package graph or a stale lock; do not spin forever.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(45 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) self = weakSelf;
+        if (self.project != project || project.targets.count > 0) return;
+        self.emptyLabel.stringValue = @"读取超时。确认 mobilebuildmcp 可用后点 ↻ 重试";
+    });
+
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSArray<NSString *> *schemes = [MBTCLI fetchSchemesForPath:path error:NULL];
-        if (!schemes.count) return;
+        NSError *error = nil;
+        NSArray<NSString *> *schemes = [MBTCLI fetchSchemesForPath:path error:&error];
+        if (!schemes.count) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) self = weakSelf;
+                if (self.project != project) return;
+                self.emptyLabel.stringValue = error
+                    ? @"读取项目失败，请确认 mobilebuildmcp 在 PATH 中"
+                    : @"没有找到 scheme：在 Xcode 里把 scheme 设为 Shared，或点 ↻ 重试";
+                [self crossfadeView:self.emptyLabel visible:YES];
+                [self crossfadeView:self.rowsScrollView visible:NO];
+                [self resizeWindowToFit];
+            });
+            return;
+        }
 
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) self = weakSelf;
@@ -658,7 +682,7 @@ static const CGFloat kRowHeight = 34;
         return;
     }
     if (!hasTargets) {
-        self.emptyLabel.stringValue = @"正在探测 targets…";
+        self.emptyLabel.stringValue = @"正在读取项目结构…（首次可能需要几十秒）";
         [self crossfadeView:self.emptyLabel visible:YES];
         [self crossfadeView:self.rowsScrollView visible:NO];
         return;
@@ -708,8 +732,12 @@ static const CGFloat kRowHeight = 34;
     NSScreen *screen = self.window.screen ?: NSScreen.mainScreen;
     CGFloat screenHeight = screen.visibleFrame.size.height;
     if (!isfinite(screenHeight) || screenHeight < 400) screenHeight = 900;
-    CGFloat contentHeight = self.window.contentView.fittingSize.height;
-    if (!isfinite(contentHeight) || contentHeight < 1) return self.window.frame;
+
+    // Measure the stack, not the content view: the content view is already as
+    // tall as the window, so its fitting size never shrinks back.
+    CGFloat stackHeight = self.rootStack.fittingSize.height;
+    if (!isfinite(stackHeight) || stackHeight < 1) return self.window.frame;
+    CGFloat contentHeight = 14 + stackHeight + 8 + self.errorHeightConstraint.constant + 14;
     contentHeight = MIN(MAX(contentHeight, 220), screenHeight - 80);
 
     NSRect frame = self.window.frame;
