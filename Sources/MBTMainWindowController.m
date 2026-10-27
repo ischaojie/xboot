@@ -17,6 +17,71 @@ static const CGFloat kRowHeight = 34;
 - (BOOL)isFlipped { return YES; }
 @end
 
+#pragma mark - Device menu item
+
+/// A menu row with the device name on the left and a clickable star on the right.
+@interface MBTDeviceMenuItemView : NSView
+@property (nonatomic, readonly, getter=isFavorite) BOOL favorite;
+@property (nonatomic, copy) void (^onToggleFavorite)(void);
+- (instancetype)initWithTitle:(NSString *)title favorite:(BOOL)favorite selected:(BOOL)selected;
+@end
+
+@implementation MBTDeviceMenuItemView {
+    NSTextField *_label;
+    NSButton *_star;
+}
+
+- (instancetype)initWithTitle:(NSString *)title favorite:(BOOL)favorite selected:(BOOL)selected {
+    self = [super initWithFrame:NSMakeRect(0, 0, 240, 22)];
+    if (!self) return nil;
+    self.autoresizingMask = NSViewWidthSizable;
+
+    _label = [NSTextField labelWithString:selected ? [@"✓  " stringByAppendingString:title]
+                                                   : [@"     " stringByAppendingString:title]];
+    _label.font = [NSFont menuFontOfSize:0];
+    _label.lineBreakMode = NSLineBreakByTruncatingTail;
+    _label.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:_label];
+
+    _star = [NSButton new];
+    _star.bordered = NO;
+    _star.imagePosition = NSImageOnly;
+    _star.target = self;
+    _star.action = @selector(toggleFavorite:);
+    _star.toolTip = @"收藏";
+    _star.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:_star];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [_label.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:9],
+        [_label.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+        [_star.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8],
+        [_star.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+        [_star.widthAnchor constraintEqualToConstant:18],
+        [_label.trailingAnchor constraintLessThanOrEqualToAnchor:_star.leadingAnchor constant:-6],
+    ]];
+
+    [self setFavorite:favorite];
+    return self;
+}
+
+- (void)setFavorite:(BOOL)favorite {
+    _favorite = favorite;
+    NSImage *image = [NSImage imageWithSystemSymbolName:(favorite ? @"star.fill" : @"star")
+                              accessibilityDescription:@"收藏"];
+    image.template = YES;
+    _star.image = image;
+    _star.contentTintColor = favorite ? NSColor.systemYellowColor : NSColor.tertiaryLabelColor;
+}
+
+- (void)toggleFavorite:(id)sender {
+    [self setFavorite:!self.favorite];
+    // Let the menu stay open so several devices can be pinned in one pass.
+    if (self.onToggleFavorite) self.onToggleFavorite();
+}
+
+@end
+
 #pragma mark - Row
 
 @interface MBTTargetRow : NSView
@@ -40,7 +105,6 @@ static const CGFloat kRowHeight = 34;
     NSArray<NSDictionary *> *_simulators;
 }
 
-static NSString *const kToggleFavorite = @"toggle-favorite";
 
 - (instancetype)initWithTarget:(MBTTarget *)target {
     self = [super initWithFrame:NSMakeRect(0, 0, kWindowWidth, kRowHeight)];
@@ -102,16 +166,38 @@ static NSString *const kToggleFavorite = @"toggle-favorite";
 }
 
 - (void)simulatorChanged:(NSPopUpButton *)sender {
-    id picked = sender.selectedItem.representedObject;
-    if ([picked isKindOfClass:[NSString class]] && [picked isEqualToString:kToggleFavorite]) {
-        NSString *simulatorID = self.target.simulatorID;
-        [self selectCurrentSimulator];
+    [self deviceItemClicked:sender.selectedItem];
+}
+
+- (NSMenuItem *)menuItemForSimulator:(NSDictionary *)simulator
+                            favorite:(BOOL)favorite
+                            selected:(BOOL)selected {
+    // The title is what NSPopUpButton renders for the selected item; the custom
+    // view only replaces how the row looks inside the open menu.
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:simulator[@"name"] ?: @"?"
+                                                  action:@selector(deviceItemClicked:)
+                                           keyEquivalent:@""];
+    item.target = self;
+    item.representedObject = simulator;
+
+    MBTDeviceMenuItemView *view =
+        [[MBTDeviceMenuItemView alloc] initWithTitle:simulator[@"name"] ?: @"?"
+                                            favorite:favorite
+                                            selected:selected];
+    NSString *simulatorID = simulator[@"simulatorId"];
+    __weak typeof(self) weakSelf = self;
+    view.onToggleFavorite = ^{
+        __strong typeof(weakSelf) self = weakSelf;
         if (self.onToggleFavorite) self.onToggleFavorite(self.target, simulatorID);
-        return;
-    }
-    if ([picked isKindOfClass:[NSDictionary class]] && self.onSimulatorPick) {
-        self.onSimulatorPick(self.target, picked);
-    }
+    };
+    item.view = view;
+    return item;
+}
+
+- (void)deviceItemClicked:(NSMenuItem *)item {
+    NSDictionary *simulator = item.representedObject;
+    if (![simulator isKindOfClass:[NSDictionary class]]) return;
+    if (self.onSimulatorPick) self.onSimulatorPick(self.target, simulator);
 }
 
 - (void)selectCurrentSimulator {
@@ -138,13 +224,13 @@ static NSString *const kToggleFavorite = @"toggle-favorite";
     NSMutableArray<NSMenuItem *> *otherItems = [NSMutableArray array];
 
     for (NSDictionary *simulator in simulators) {
-        BOOL picked = [favorites containsObject:simulator[@"simulatorId"] ?: @""];
-        NSString *title = picked
-            ? [NSString stringWithFormat:@"★ %@", simulator[@"name"] ?: @"?"]
-            : (simulator[@"name"] ?: @"?");
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
-        item.representedObject = simulator;
-        [(picked ? favoriteItems : otherItems) addObject:item];
+        NSString *simulatorID = simulator[@"simulatorId"] ?: @"";
+        BOOL isFavorite = [favorites containsObject:simulatorID];
+        BOOL isSelected = [simulatorID isEqualToString:self.target.simulatorID];
+        NSMenuItem *item = [self menuItemForSimulator:simulator
+                                             favorite:isFavorite
+                                             selected:isSelected];
+        [(isFavorite ? favoriteItems : otherItems) addObject:item];
     }
 
     for (NSMenuItem *item in favoriteItems) [menu addItem:item];
@@ -152,18 +238,6 @@ static NSString *const kToggleFavorite = @"toggle-favorite";
     for (NSMenuItem *item in otherItems) [menu addItem:item];
 
     [self.simulatorPopUp setMenu:menu];
-    // The toggle goes first: with 20+ simulators a trailing item lands off-screen.
-    if (self.target.simulatorID.length) {
-        BOOL isFavorite = [favorites containsObject:self.target.simulatorID];
-        NSString *name = self.target.simulatorName ?: @"当前设备";
-        NSString *title = isFavorite
-            ? [NSString stringWithFormat:@"取消收藏 %@", name]
-            : [NSString stringWithFormat:@"收藏 %@", name];
-        NSMenuItem *toggle = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
-        toggle.representedObject = kToggleFavorite;
-        [menu insertItem:toggle atIndex:0];
-        [menu insertItem:[NSMenuItem separatorItem] atIndex:1];
-    }
     [self selectCurrentSimulator];
     [self updatePlatformDisplay];
 }
