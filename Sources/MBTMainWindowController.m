@@ -35,7 +35,7 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, copy) void (^onSimulatorPick)(MBTTarget *target, NSDictionary *simulator);
 @property (nonatomic, copy) void (^onToggleFavorite)(MBTTarget *target, NSString *simulatorID);
 - (instancetype)initWithTarget:(MBTTarget *)target;
-- (void)setSimulators:(NSArray<NSDictionary *> *)simulators favorites:(NSSet<NSString *> *)favorites;
+- (void)setSimulators:(NSArray<NSDictionary *> *)simulators recent:(NSArray<NSString *> *)recent;
 - (void)setBusy:(BOOL)busy status:(NSString *)status;
 - (void)setIdleStatus:(NSString *)status;
 @end
@@ -125,24 +125,16 @@ static const CGFloat kRowHeight = 34;
     [self deviceItemClicked:sender.selectedItem];
 }
 
-- (NSMenuItem *)menuItemForSimulator:(NSDictionary *)simulator
-                            favorite:(BOOL)favorite
-                            selected:(BOOL)selected {
+- (NSMenuItem *)menuItemForSimulator:(NSDictionary *)simulator selected:(BOOL)selected {
     // Standard items only. A custom NSMenuItem.view breaks NSPopUpButton's
     // selection tracking: clicks close the menu but selectedItem never updates.
-    NSString *name = simulator[@"name"] ?: @"?";
-    NSString *title = favorite ? [NSString stringWithFormat:@"★ %@", name] : name;
-    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:simulator[@"name"] ?: @"?"
                                                   action:@selector(deviceItemClicked:)
                                            keyEquivalent:@""];
     item.target = self;
     item.representedObject = simulator;
     item.state = selected ? NSControlStateValueOn : NSControlStateValueOff;
     return item;
-}
-
-- (void)toggleFavoriteForCurrent:(id)sender {
-    if (self.onToggleFavorite) self.onToggleFavorite(self.target, self.target.simulatorID);
 }
 
 - (void)deviceItemClicked:(NSMenuItem *)item {
@@ -170,35 +162,41 @@ static const CGFloat kRowHeight = 34;
     if (self.onRun) self.onRun(self.target);
 }
 
-- (void)setSimulators:(NSArray<NSDictionary *> *)simulators favorites:(NSSet<NSString *> *)favorites {
+- (void)setSimulators:(NSArray<NSDictionary *> *)simulators recent:(NSArray<NSString *> *)recent {
     _simulators = simulators;
 
+    NSMutableDictionary<NSString *, NSDictionary *> *byID = [NSMutableDictionary dictionary];
+    for (NSDictionary *simulator in simulators) {
+        NSString *simulatorID = simulator[@"simulatorId"];
+        if (simulatorID) byID[simulatorID] = simulator;
+    }
+
     NSMenu *menu = [[NSMenu alloc] init];
-    NSMutableArray<NSMenuItem *> *favoriteItems = [NSMutableArray array];
+    NSMutableArray<NSMenuItem *> *recentItems = [NSMutableArray array];
     NSMutableArray<NSMenuItem *> *phoneItems = [NSMutableArray array];
     NSMutableArray<NSMenuItem *> *otherItems = [NSMutableArray array];
+    NSMutableSet<NSString *> *used = [NSMutableSet set];
+
+    // Recently used devices float to the top so the common case needs no scrolling.
+    for (NSString *simulatorID in recent) {
+        NSDictionary *simulator = byID[simulatorID];
+        if (!simulator) continue;  // deleted in Xcode since it was last used
+        [recentItems addObject:[self menuItemForSimulator:simulator
+                                                 selected:[simulatorID isEqualToString:self.target.simulatorID]]];
+        [used addObject:simulatorID];
+    }
 
     for (NSDictionary *simulator in simulators) {
         NSString *simulatorID = simulator[@"simulatorId"] ?: @"";
-        BOOL isFavorite = [favorites containsObject:simulatorID];
-        BOOL isSelected = [simulatorID isEqualToString:self.target.simulatorID];
+        if ([used containsObject:simulatorID]) continue;  // already listed above
         NSMenuItem *item = [self menuItemForSimulator:simulator
-                                             favorite:isFavorite
-                                             selected:isSelected];
+                                            selected:[simulatorID isEqualToString:self.target.simulatorID]];
         NSString *name = simulator[@"name"] ?: @"";
-        if (isFavorite) {
-            [favoriteItems addObject:item];
-        } else if ([name hasPrefix:@"iPhone"]) {
-            [phoneItems addObject:item];
-        } else {
-            [otherItems addObject:item];
-        }
+        [( [name hasPrefix:@"iPhone"] ? phoneItems : otherItems ) addObject:item];
     }
 
-    // 27 simulators in one flat list overflows the screen; phones first, the
-    // rest behind a submenu.
-    for (NSMenuItem *item in favoriteItems) [menu addItem:item];
-    if (favoriteItems.count && phoneItems.count) [menu addItem:[NSMenuItem separatorItem]];
+    for (NSMenuItem *item in recentItems) [menu addItem:item];
+    if (recentItems.count && phoneItems.count) [menu addItem:[NSMenuItem separatorItem]];
     for (NSMenuItem *item in phoneItems) [menu addItem:item];
 
     if (otherItems.count) {
@@ -210,19 +208,6 @@ static const CGFloat kRowHeight = 34;
         for (NSMenuItem *item in otherItems) [submenu addItem:item];
         more.submenu = submenu;
         [menu addItem:more];
-    }
-
-    if (self.target.simulatorID.length) {
-        BOOL isFavorite = [favorites containsObject:self.target.simulatorID];
-        NSString *name = self.target.simulatorName ?: @"当前设备";
-        NSString *title = isFavorite ? [NSString stringWithFormat:@"取消收藏 %@", name]
-                                     : [NSString stringWithFormat:@"收藏 %@", name];
-        NSMenuItem *toggle = [[NSMenuItem alloc] initWithTitle:title
-                                                        action:@selector(toggleFavoriteForCurrent:)
-                                                 keyEquivalent:@""];
-        toggle.target = self;
-        [menu insertItem:toggle atIndex:0];
-        [menu insertItem:[NSMenuItem separatorItem] atIndex:1];
     }
 
     [self.simulatorPopUp setMenu:menu];
@@ -668,8 +653,7 @@ static const CGFloat kRowHeight = 34;
 
     for (MBTTarget *target in self.project.targets) {
         MBTTargetRow *row = [[MBTTargetRow alloc] initWithTarget:target];
-        [row setSimulators:self.simulators
-                 favorites:[NSSet setWithArray:self.store.favoriteSimulatorIDs]];
+        [row setSimulators:self.simulators recent:self.store.recentSimulatorIDs];
         __weak typeof(self) weakSelf = self;
         row.onRun = ^(MBTTarget *t) { [weakSelf runTarget:t]; };
         row.onSimulatorPick = ^(MBTTarget *t, NSDictionary *simulator) {
@@ -677,11 +661,6 @@ static const CGFloat kRowHeight = 34;
             t.simulatorID = simulator[@"simulatorId"];
             t.simulatorName = simulator[@"name"];
             [self.store save];
-        };
-        row.onToggleFavorite = ^(MBTTarget *t, NSString *simulatorID) {
-            __strong typeof(weakSelf) self = weakSelf;
-            [self.store toggleSimulatorFavorite:simulatorID];
-            [self rebuildRows];
         };
         [self.rowsStack addArrangedSubview:row];
         [row.widthAnchor constraintEqualToAnchor:self.rowsStack.widthAnchor].active = YES;
@@ -924,8 +903,12 @@ static const CGFloat kRowHeight = 34;
     self.buildStartTime = [NSDate date];
     [self refreshLogButton];
 
+    // Recorded on run, not on pick: "recently used" should mean actually used.
+    [self.store recordSimulatorUse:target.simulatorID];
+
     MBTTargetRow *row = [self rowForTarget:target];
     self.activeRow = row;
+    [row setSimulators:self.simulators recent:self.store.recentSimulatorIDs];
     [row setFailed:NO];
     [row setBusy:YES status:@"准备中…"];
     [self setRowsEnabled:NO except:row];

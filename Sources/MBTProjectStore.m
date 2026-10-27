@@ -1,12 +1,13 @@
 #import "MBTProjectStore.h"
 
 static NSString *const kProjectsKey = @"projects";
-static NSString *const kFavoritesKey = @"favoriteSimulators";
+static NSString *const kRecentKey = @"recentSimulators";
+static const NSUInteger kRecentLimit = 3;
 
 @interface MBTProjectStore ()
 @property (nonatomic, strong) NSUserDefaults *defaults;
 @property (nonatomic, strong) NSMutableArray<MBTProject *> *items;
-@property (nonatomic, strong) NSMutableArray<NSString *> *favorites;
+@property (nonatomic, strong) NSMutableArray<NSString *> *recent;
 @end
 
 @implementation MBTProjectStore
@@ -16,15 +17,18 @@ static NSString *const kFavoritesKey = @"favoriteSimulators";
     if (self) {
         _defaults = defaults;
         _items = [NSMutableArray array];
-        _favorites = [NSMutableArray array];
+        _recent = [NSMutableArray array];
         [self load];
     }
     return self;
 }
 
 - (void)load {
-    for (id entry in [self.defaults arrayForKey:kFavoritesKey]) {
-        if ([entry isKindOfClass:[NSString class]]) [self.favorites addObject:entry];
+    // One-time cleanup of the favourites list this replaces.
+    [self.defaults removeObjectForKey:@"favoriteSimulators"];
+
+    for (id entry in [self.defaults arrayForKey:kRecentKey]) {
+        if ([entry isKindOfClass:[NSString class]]) [self.recent addObject:entry];
     }
 
     NSArray *raw = [self.defaults arrayForKey:kProjectsKey];
@@ -73,22 +77,18 @@ static NSString *const kFavoritesKey = @"favoriteSimulators";
     [self save];
 }
 
-- (NSArray<NSString *> *)favoriteSimulatorIDs {
-    return [self.favorites copy];
+- (NSArray<NSString *> *)recentSimulatorIDs {
+    return [self.recent copy];
 }
 
-- (BOOL)isSimulatorFavorite:(NSString *)simulatorID {
-    return simulatorID && [self.favorites containsObject:simulatorID];
-}
-
-- (void)toggleSimulatorFavorite:(NSString *)simulatorID {
+- (void)recordSimulatorUse:(NSString *)simulatorID {
     if (!simulatorID.length) return;
-    if ([self.favorites containsObject:simulatorID]) {
-        [self.favorites removeObject:simulatorID];
-    } else {
-        [self.favorites addObject:simulatorID];
+    [self.recent removeObject:simulatorID];
+    [self.recent insertObject:simulatorID atIndex:0];
+    while (self.recent.count > kRecentLimit) {
+        [self.recent removeLastObject];
     }
-    [self.defaults setObject:[self.favorites copy] forKey:kFavoritesKey];
+    [self.defaults setObject:[self.recent copy] forKey:kRecentKey];
     [self.defaults synchronize];
 }
 

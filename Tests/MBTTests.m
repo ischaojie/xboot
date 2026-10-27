@@ -131,26 +131,33 @@ static void test_store_add_and_order(void) {
     EXPECT(reloaded.projects.count == 1);
 }
 
-static void test_simulator_favorites(void) {
+static void test_recent_simulators(void) {
     NSUserDefaults *defaults = TestDefaults();
     MBTProjectStore *store = [[MBTProjectStore alloc] initWithDefaults:defaults];
-    EXPECT(store.favoriteSimulatorIDs.count == 0);
-    EXPECT(![store isSimulatorFavorite:@"UDID-1"]);
+    EXPECT(store.recentSimulatorIDs.count == 0);
 
-    [store toggleSimulatorFavorite:@"UDID-1"];
-    EXPECT([store isSimulatorFavorite:@"UDID-1"]);
-    EXPECT(store.favoriteSimulatorIDs.count == 1);
+    [store recordSimulatorUse:@"A"];
+    [store recordSimulatorUse:@"B"];
+    EXPECT(store.recentSimulatorIDs.count == 2);
+    EXPECT([store.recentSimulatorIDs.firstObject isEqualToString:@"B"]);
 
-    [store toggleSimulatorFavorite:@"UDID-2"];
-    EXPECT(store.favoriteSimulatorIDs.count == 2);
+    // Using an old device again moves it to the front instead of duplicating it.
+    [store recordSimulatorUse:@"A"];
+    EXPECT([store.recentSimulatorIDs.firstObject isEqualToString:@"A"]);
+    EXPECT(store.recentSimulatorIDs.count == 2);
+
+    [store recordSimulatorUse:@"C"];
+    [store recordSimulatorUse:@"D"];
+    EXPECT(store.recentSimulatorIDs.count == 3);
+    EXPECT([store.recentSimulatorIDs.firstObject isEqualToString:@"D"]);
+    EXPECT(![store.recentSimulatorIDs containsObject:@"B"]);
 
     MBTProjectStore *reloaded = [[MBTProjectStore alloc] initWithDefaults:defaults];
-    EXPECT([reloaded isSimulatorFavorite:@"UDID-1"]);
-    EXPECT([reloaded isSimulatorFavorite:@"UDID-2"]);
+    EXPECT([reloaded.recentSimulatorIDs.firstObject isEqualToString:@"D"]);
+    EXPECT(reloaded.recentSimulatorIDs.count == 3);
 
-    [reloaded toggleSimulatorFavorite:@"UDID-1"];
-    EXPECT(![reloaded isSimulatorFavorite:@"UDID-1"]);
-    EXPECT(reloaded.favoriteSimulatorIDs.count == 1);
+    [reloaded recordSimulatorUse:nil];
+    EXPECT(reloaded.recentSimulatorIDs.count == 3);
 }
 
 static void test_store_migrates_legacy_single_scheme(void) {
@@ -300,7 +307,7 @@ int main(void) {
         test_project_targets();
         test_store_add_and_order();
         test_store_migrates_legacy_single_scheme();
-        test_simulator_favorites();
+        test_recent_simulators();
         test_platform_detection();
         test_diagnostic_display_filter();
         test_location_with_column();

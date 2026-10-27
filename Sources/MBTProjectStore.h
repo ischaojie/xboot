@@ -9,10 +9,9 @@
 - (void)removeProjectAtPath:(NSString *)path;
 - (MBTProject *)projectAtPath:(NSString *)path;
 
-/// Simulator favourites are global, not per project.
-@property (nonatomic, readonly) NSArray<NSString *> *favoriteSimulatorIDs;
-- (BOOL)isSimulatorFavorite:(NSString *)simulatorID;
-- (void)toggleSimulatorFavorite:(NSString *)simulatorID;
+/// Recently used simulators, most recent first, capped at three. Global.
+@property (nonatomic, readonly) NSArray<NSString *> *recentSimulatorIDs;
+- (void)recordSimulatorUse:(NSString *)simulatorID;
 
 - (void)save;
 @end
