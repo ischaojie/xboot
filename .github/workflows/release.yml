@@ -95,9 +95,18 @@ jobs:
               --issuer "$NOTARY_ISSUER" \
               --wait
             rm -f "$RUNNER_TEMP/notary.p8"
-            xcrun stapler staple build/xboot.app
-            # staple writes the ticket into the bundle; validate and spctl reach out
-            # to Apple's services, which are occasionally flaky from CI networks.
+            # staple downloads the ticket from Apple, so it is a networked step and
+            # CI egress to Apple's services is occasionally flaky.
+            STAPLED=false
+            for attempt in 1 2 3 4 5; do
+              if xcrun stapler staple build/xboot.app; then STAPLED=true; break; fi
+              echo "::warning::staple attempt $attempt failed, retrying"
+              sleep $((attempt * 10))
+            done
+            if [ "$STAPLED" != "true" ]; then
+              echo "::error::could not staple the notarization ticket"
+              exit 1
+            fi
             xcrun stapler validate build/xboot.app \
               || echo "::warning::stapler validate could not reach Apple (ticket is stapled)"
             spctl -a -vvv --type exec build/xboot.app \
