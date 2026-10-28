@@ -73,8 +73,11 @@ Requires `mobilebuildmcp` on `$PATH` (`brew install getsentry/xcodebuildmcp/mobi
 - Probes each scheme's `PLATFORM_NAME` / `WRAPPER_EXTENSION` in the background and
   labels non-runnable ones (`aggregate`, `extension`, `framework`) instead of pretending
   they can run.
-- Routes runnable schemes to `simulator build-and-run` or `macos build-and-run`
-  automatically; macOS targets hide the device picker.
+- Routes runnable schemes to `simulator build-and-run`, `device build-and-run` or
+  `macos build-and-run` automatically; macOS targets hide the device picker.
+- Lists connected iPhones / iPads under a 真机 section at the top of the device picker,
+  re-listed each time the app is brought forward. Signing is whatever the project has
+  configured; xboot passes no signing flags.
 - Remembers a simulator per target, stream stage / phase / compiler errors into the row
   and the error pane below.
 - One build at a time across the app; other rows are disabled while a build runs.
@@ -85,7 +88,7 @@ Requires `mobilebuildmcp` on `$PATH` (`brew install getsentry/xcodebuildmcp/mobi
 
 ## Not in this version
 
-Runtime log streaming, breakpoints, hot reload, physical devices, UI automation,
+Runtime log streaming, breakpoints, hot reload, UI automation,
 notifications, global hotkeys. Each was considered and deferred; see the
 discussion in the commit history.
 
@@ -103,7 +106,7 @@ Sources/
   MBTBuildRunner.m           NSTask + streaming JSONL
   MBTBuildEvent.m            event parsing
   MBTLineBuffer.m            newline framing across pipe chunks
-  MBTCLI.m                   list-schemes / list simulators
+  MBTCLI.m                   list-schemes / list simulators and devices
   MBTProject{,Store}.m       recent projects, persisted in NSUserDefaults
   MBTTarget.m                one runnable scheme per project + its device
 Tests/

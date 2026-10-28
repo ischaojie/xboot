@@ -100,4 +100,32 @@ static NSString *const kCLICandidatePaths[] = {
     return [simulators isKindOfClass:[NSArray class]] ? simulators : @[];
 }
 
++ (NSArray<NSDictionary *> *)fetchDevices:(NSError **)error {
+    NSDictionary *json = [self runJSONCommand:@[@"device", @"list", @"--output", @"json"] error:error];
+    NSArray *devices = json[@"data"][@"devices"];
+    if (![devices isKindOfClass:[NSArray class]]) return @[];
+    return [self physicalDevicesFrom:devices excludingSimulators:[self fetchSimulators:NULL]];
+}
+
++ (NSArray<NSDictionary *> *)physicalDevicesFrom:(NSArray *)devices
+                              excludingSimulators:(NSArray *)simulators {
+    NSMutableSet<NSString *> *simulatorIDs = [NSMutableSet set];
+    for (id simulator in simulators) {
+        if (![simulator isKindOfClass:[NSDictionary class]]) continue;
+        NSString *simulatorID = simulator[@"simulatorId"];
+        if ([simulatorID isKindOfClass:[NSString class]]) [simulatorIDs addObject:simulatorID];
+    }
+
+    NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+    for (id device in devices) {
+        if (![device isKindOfClass:[NSDictionary class]]) continue;
+        NSString *deviceID = device[@"deviceId"];
+        if (![deviceID isKindOfClass:[NSString class]] || !deviceID.length) continue;
+        if ([simulatorIDs containsObject:deviceID]) continue;
+        if (![device[@"isAvailable"] boolValue]) continue;
+        [result addObject:device];
+    }
+    return result;
+}
+
 @end

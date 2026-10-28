@@ -33,10 +33,13 @@
 
     NSString *pathFlag = [project.path hasSuffix:@".xcworkspace"] ? @"--workspace-path" : @"--project-path";
     BOOL isMac = target.isMacOS;
-    NSString *workflow = isMac ? @"macos" : @"simulator";
+    BOOL onDevice = !isMac && target.onDevice;
+    NSString *workflow = isMac ? @"macos" : (onDevice ? @"device" : @"simulator");
     NSMutableArray<NSString *> *args = [@[workflow, @"build-and-run", pathFlag, project.path] mutableCopy];
     if (target.scheme.length) [args addObjectsFromArray:@[@"--scheme", target.scheme]];
-    if (!isMac && target.simulatorID.length) [args addObjectsFromArray:@[@"--simulator-id", target.simulatorID]];
+    if (!isMac && target.simulatorID.length) {
+        [args addObjectsFromArray:@[onDevice ? @"--device-id" : @"--simulator-id", target.simulatorID]];
+    }
     if (project.configuration.length) [args addObjectsFromArray:@[@"--configuration", project.configuration]];
     [args addObjectsFromArray:@[@"--output", @"jsonl"]];
 

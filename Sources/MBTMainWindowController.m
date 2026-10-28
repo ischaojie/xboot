@@ -17,6 +17,11 @@ static CGFloat MBTMotionDuration(CGFloat duration) {
 }
 static const CGFloat kRowHeight = 34;
 
+/// Menu entries are raw CLI dictionaries: simulators carry simulatorId, devices deviceId.
+static NSString *MBTDestinationID(NSDictionary *destination) {
+    return destination[@"simulatorId"] ?: destination[@"deviceId"];
+}
+
 @interface MBTFlippedView : NSView
 @end
 
@@ -35,7 +40,9 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, copy) void (^onSimulatorPick)(MBTTarget *target, NSDictionary *simulator);
 @property (nonatomic, copy) void (^onToggleFavorite)(MBTTarget *target, NSString *simulatorID);
 - (instancetype)initWithTarget:(MBTTarget *)target;
-- (void)setSimulators:(NSArray<NSDictionary *> *)simulators recent:(NSArray<NSString *> *)recent;
+- (void)setSimulators:(NSArray<NSDictionary *> *)simulators
+               devices:(NSArray<NSDictionary *> *)devices
+                recent:(NSArray<NSString *> *)recent;
 - (void)setBusy:(BOOL)busy status:(NSString *)status;
 - (void)setIdleStatus:(NSString *)status;
 @end
@@ -140,8 +147,9 @@ static const CGFloat kRowHeight = 34;
 - (void)deviceItemClicked:(NSMenuItem *)item {
     NSDictionary *simulator = item.representedObject;
     if (![simulator isKindOfClass:[NSDictionary class]]) return;
-    self.target.simulatorID = simulator[@"simulatorId"];
+    self.target.simulatorID = MBTDestinationID(simulator);
     self.target.simulatorName = simulator[@"name"];
+    self.target.onDevice = simulator[@"deviceId"] != nil;
     self.simulatorPopUp.title = self.target.simulatorName ?: @"选择设备";
     if (self.onSimulatorPick) self.onSimulatorPick(self.target, simulator);
 }
@@ -150,7 +158,7 @@ static const CGFloat kRowHeight = 34;
     for (NSMenuItem *item in self.simulatorPopUp.menu.itemArray) {
         NSDictionary *simulator = item.representedObject;
         if (![simulator isKindOfClass:[NSDictionary class]]) continue;
-        if ([simulator[@"simulatorId"] isEqualToString:self.target.simulatorID]) {
+        if ([MBTDestinationID(simulator) isEqualToString:self.target.simulatorID]) {
             [self.simulatorPopUp selectItem:item];
             return;
         }
@@ -162,7 +170,9 @@ static const CGFloat kRowHeight = 34;
     if (self.onRun) self.onRun(self.target);
 }
 
-- (void)setSimulators:(NSArray<NSDictionary *> *)simulators recent:(NSArray<NSString *> *)recent {
+- (void)setSimulators:(NSArray<NSDictionary *> *)simulators
+               devices:(NSArray<NSDictionary *> *)devices
+                recent:(NSArray<NSString *> *)recent {
     _simulators = simulators;
 
     NSMutableDictionary<NSString *, NSDictionary *> *byID = [NSMutableDictionary dictionary];
@@ -193,6 +203,16 @@ static const CGFloat kRowHeight = 34;
                                             selected:[simulatorID isEqualToString:self.target.simulatorID]];
         NSString *name = simulator[@"name"] ?: @"";
         [( [name hasPrefix:@"iPhone"] ? phoneItems : otherItems ) addObject:item];
+    }
+
+    // Plugged-in hardware is a deliberate choice, so it leads; recents only track simulators.
+    if (devices.count) {
+        [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"真机"]];
+        for (NSDictionary *device in devices) {
+            [menu addItem:[self menuItemForSimulator:device
+                                            selected:[device[@"deviceId"] isEqualToString:self.target.simulatorID]]];
+        }
+        [menu addItem:[NSMenuItem separatorItem]];
     }
 
     for (NSMenuItem *item in recentItems) [menu addItem:item];
@@ -304,6 +324,7 @@ static const CGFloat kRowHeight = 34;
 @property (nonatomic, strong) NSMutableArray<NSString *> *logLines;
 @property (nonatomic, strong) NSDate *buildStartTime;
 @property (nonatomic, strong) NSArray<NSDictionary *> *simulators;
+@property (nonatomic, strong) NSArray<NSDictionary *> *devices;
 
 @property (nonatomic, strong) NSPopUpButton *projectPopUp;
 @property (nonatomic, strong) NSPopUpButton *configPopUp;
@@ -337,11 +358,34 @@ static const CGFloat kRowHeight = 34;
     _diagnostics = [NSMutableArray array];
     _logLines = [NSMutableArray array];
     _simulators = @[];
+    _devices = @[];
     [self buildInterface];
     [self setupLogPopover];
     [self reload];
     [self loadSimulators];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(refreshDevices)
+                                                 name:NSApplicationDidBecomeActiveNotification
+                                               object:nil];
     return self;
+}
+
+/// Phones come and go while the app sits in the Dock; re-list them whenever it is brought forward.
+- (void)refreshDevices {
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSArray<NSDictionary *> *devices = [MBTCLI fetchDevices:NULL];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) self = weakSelf;
+            if ([self.devices isEqualToArray:devices]) return;
+            self.devices = devices;
+            // Update menus in place: rebuilding rows would drop the one running a build.
+            for (MBTTargetRow *row in self.rowsStack.arrangedSubviews) {
+                if (![row isKindOfClass:[MBTTargetRow class]]) continue;
+                [row setSimulators:self.simulators devices:self.devices recent:self.store.recentSimulatorIDs];
+            }
+        });
+    });
 }
 
 - (void)loadSimulators {
@@ -653,14 +697,11 @@ static const CGFloat kRowHeight = 34;
 
     for (MBTTarget *target in self.project.targets) {
         MBTTargetRow *row = [[MBTTargetRow alloc] initWithTarget:target];
-        [row setSimulators:self.simulators recent:self.store.recentSimulatorIDs];
+        [row setSimulators:self.simulators devices:self.devices recent:self.store.recentSimulatorIDs];
         __weak typeof(self) weakSelf = self;
         row.onRun = ^(MBTTarget *t) { [weakSelf runTarget:t]; };
         row.onSimulatorPick = ^(MBTTarget *t, NSDictionary *simulator) {
-            __strong typeof(weakSelf) self = weakSelf;
-            t.simulatorID = simulator[@"simulatorId"];
-            t.simulatorName = simulator[@"name"];
-            [self.store save];
+            [weakSelf.store save];  // the row already wrote the pick into the target
         };
         [self.rowsStack addArrangedSubview:row];
         [row.widthAnchor constraintEqualToAnchor:self.rowsStack.widthAnchor].active = YES;
@@ -908,7 +949,7 @@ static const CGFloat kRowHeight = 34;
 
     MBTTargetRow *row = [self rowForTarget:target];
     self.activeRow = row;
-    [row setSimulators:self.simulators recent:self.store.recentSimulatorIDs];
+    [row setSimulators:self.simulators devices:self.devices recent:self.store.recentSimulatorIDs];
     [row setFailed:NO];
     [row setBusy:YES status:@"准备中…"];
     [self setRowsEnabled:NO except:row];

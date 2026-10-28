@@ -5,8 +5,10 @@
 @property (nonatomic, copy) NSString *scheme;
 /// "ios" or "macos"; nil when the scheme is not runnable (aggregate, framework).
 @property (nonatomic, copy) NSString *platform;
+/// Run destination: a simulator UDID, or a physical device id when onDevice is YES.
 @property (nonatomic, copy) NSString *simulatorID;
 @property (nonatomic, copy) NSString *simulatorName;
+@property (nonatomic) BOOL onDevice;
 /// NO until a build-settings probe has run for this scheme.
 @property (nonatomic) BOOL probed;
 /// Human label for non-runnable targets: "extension", "framework", "aggregate".

@@ -274,6 +274,34 @@ static void test_target_round_trip(void) {
     EXPECT([skippedCopy.kindLabel isEqualToString:@"extension"]);
 }
 
+static void test_device_target_round_trip(void) {
+    MBTTarget *target = [MBTTarget targetWithScheme:@"App"];
+    target.platform = @"ios";
+    target.simulatorID = @"BB167D31-E074-5354-B71B-4C69C87B8CDB";
+    target.onDevice = YES;
+    MBTTarget *copy = [MBTTarget targetWithDictionary:[target dictionaryRepresentation]];
+    EXPECT(copy.onDevice);
+    EXPECT([copy.simulatorID isEqualToString:target.simulatorID]);
+
+    // Targets saved before device support default to the simulator.
+    MBTTarget *legacy = [MBTTarget targetWithDictionary:@{@"scheme": @"App", @"simulatorID": @"X"}];
+    EXPECT(!legacy.onDevice);
+}
+
+static void test_physical_devices_filter(void) {
+    NSArray *devices = @[
+        @{@"name": @"iPhone 17", @"deviceId": @"SIM-1", @"isAvailable": @YES},
+        @{@"name": @"Phone", @"deviceId": @"HW-1", @"isAvailable": @YES},
+        @{@"name": @"Old iPad", @"deviceId": @"HW-2", @"isAvailable": @NO},
+        @{@"name": @"No id", @"isAvailable": @YES},
+        @"garbage",
+    ];
+    NSArray *simulators = @[ @{@"name": @"iPhone 17", @"simulatorId": @"SIM-1"} ];
+    NSArray *result = [MBTCLI physicalDevicesFrom:devices excludingSimulators:simulators];
+    EXPECT(result.count == 1);
+    EXPECT([result.firstObject[@"deviceId"] isEqualToString:@"HW-1"]);
+}
+
 static void test_first_runnable_target(void) {
     MBTProject *project = [MBTProject projectWithPath:@"/tmp/A.xcodeproj"];
     EXPECT([project firstRunnableTarget] == nil);
@@ -313,6 +341,8 @@ int main(void) {
         test_location_with_column();
         test_target_round_trip();
         test_first_runnable_target();
+        test_device_target_round_trip();
+        test_physical_devices_filter();
         test_line_buffer_splits_across_chunks();
         printf("%d checks, %d failures\n", gChecks, gFailures);
         return gFailures > 0 ? 1 : 0;

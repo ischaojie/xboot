@@ -7,6 +7,11 @@
 + (NSArray<NSString *> *)fetchSchemesForPath:(NSString *)path error:(NSError **)error;
 /// Synchronous. Returns simulator dictionaries with name/simulatorId/state/runtime.
 + (NSArray<NSDictionary *> *)fetchSimulators:(NSError **)error;
+/// Synchronous. Connected physical devices with name/deviceId/platform/osVersion.
++ (NSArray<NSDictionary *> *)fetchDevices:(NSError **)error;
+/// `device list` also reports simulators; keep only available hardware.
++ (NSArray<NSDictionary *> *)physicalDevicesFrom:(NSArray *)devices
+                              excludingSimulators:(NSArray *)simulators;
 /// Synchronous. Flat key/value build settings for one scheme.
 + (NSDictionary<NSString *, NSString *> *)fetchBuildSettingsForPath:(NSString *)path
                                                              scheme:(NSString *)scheme
